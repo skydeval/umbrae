@@ -1,0 +1,11 @@
+target/
+.claude
+.chainlink
+.mcp.json
+.vscode
+# Local design history and notes; never committed
+docs/internal/
+# Keys and real deployment config never belong in this repo
+*.key
+*.env
+!*.env.example

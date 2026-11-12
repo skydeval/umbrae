@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/umbrae-core",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+rust-version = "1.88"
