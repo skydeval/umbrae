@@ -1,0 +1,17 @@
+[package]
+name = "umbrae-interop"
+description = "Interop harness: a syncer built on umbrae-core, run against the reference spaces PDS"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22"
+p256 = { version = "0.13", features = ["ecdsa"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde_json = "1"
+tiny_http = "0.12"
+umbrae-core = { path = "../umbrae-core" }
+ureq = { version = "2", default-features = false, features = ["json"] }

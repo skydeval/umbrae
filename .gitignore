@@ -1,4 +1,5 @@
 target/
+interop-pds.log
 .claude
 .chainlink
 .mcp.json

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/umbrae-core",
+    "crates/umbrae-interop",
 ]
 
 [workspace.package]
