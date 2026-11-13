@@ -8,8 +8,14 @@
 //! The proposal is still an alpha; anything that may still move, such as
 //! the URI syntax, is kept inside a single module.
 
+pub mod cid;
+pub mod commit;
+pub mod drisl;
 pub mod lthash;
 pub mod uri;
 
+pub use cid::{Cid, CidError, Codec};
+pub use commit::{Commit, CommitError, OpError, RepoOp, COMMIT_HEADER, COMMIT_VERSION};
+pub use drisl::{DrislError, Value};
 pub use lthash::LtHash;
 pub use uri::{SpaceRecordUri, SpaceRef, UriError};

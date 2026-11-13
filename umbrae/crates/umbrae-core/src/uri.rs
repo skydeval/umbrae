@@ -321,9 +321,35 @@ pub fn is_valid_record_key(s: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b':' | b'~'))
 }
 
+/// atproto TID syntax: 13 characters of sortable base32
+/// (`234567abcdefghijklmnopqrstuvwxyz`), the first limited to `234567a-j`
+/// so the top bit is zero.
+pub fn is_valid_tid(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 13
+        && matches!(b[0], b'2'..=b'7' | b'a'..=b'j')
+        && b.iter().all(|c| matches!(c, b'2'..=b'7' | b'a'..=b'z'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tid_syntax() {
+        assert!(is_valid_tid("3mwcj3b6uak2f"));
+        assert!(is_valid_tid("3kbcq3p7ad422"));
+        assert!(is_valid_tid("2222222222222"));
+        assert!(is_valid_tid("jzzzzzzzzzzzz"));
+        assert!(!is_valid_tid("kzzzzzzzzzzzz"));
+        assert!(!is_valid_tid("3mwcj3b6uak2"));
+        assert!(!is_valid_tid("3mwcj3b6uak2ff"));
+        assert!(!is_valid_tid("3MWCJ3B6UAK2F"));
+        // 0 and 1 aren't in the alphabet. The reference tests use
+        // `3kbcq3p7ad400` as a rev, which is not a valid TID.
+        assert!(!is_valid_tid("3kbcq3p7ad400"));
+        assert!(!is_valid_tid("3kbcq3p7ad411"));
+    }
 
     const SPACE: &str = "at://did:plc:ewvi7nxzyoun6zhxrhs64oiz/space/app.bsky.group/default";
     const RECORD: &str = "at://did:plc:ewvi7nxzyoun6zhxrhs64oiz/space/app.bsky.group/default/did:plc:44ybard66vv44zksje25o7dz/app.bsky.feed.post/3jui7kd54zh2y";
