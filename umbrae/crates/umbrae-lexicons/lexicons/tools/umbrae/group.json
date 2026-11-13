@@ -1,0 +1,20 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.group",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "The name of a group, written by the space authority into its own repo in the space, so members see it. Readers ignore one written by anyone else.",
+      "key": "literal:self",
+      "record": {
+        "type": "object",
+        "required": ["name", "createdAt"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 640, "maxGraphemes": 64 },
+          "description": { "type": "string", "maxLength": 3000, "maxGraphemes": 300 },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    }
+  }
+}

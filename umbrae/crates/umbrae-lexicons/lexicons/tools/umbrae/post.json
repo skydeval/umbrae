@@ -1,0 +1,41 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.post",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A hidden post. Written only into a tools.umbrae.space space, never into a public repo. Same fields as app.bsky.feed.post. A reply to a hidden post lives in that post's space; quotes of hidden posts are not supported.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["text", "createdAt"],
+        "properties": {
+          "text": { "type": "string", "maxLength": 3000, "maxGraphemes": 300 },
+          "facets": { "type": "array", "items": { "type": "ref", "ref": "app.bsky.richtext.facet" } },
+          "reply": { "type": "ref", "ref": "#replyRef" },
+          "embed": {
+            "type": "union",
+            "refs": [
+              "app.bsky.embed.images",
+              "app.bsky.embed.video",
+              "app.bsky.embed.external",
+              "app.bsky.embed.record",
+              "app.bsky.embed.recordWithMedia"
+            ]
+          },
+          "langs": { "type": "array", "maxLength": 3, "items": { "type": "string", "format": "language" } },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    },
+    "replyRef": {
+      "type": "object",
+      "description": "A hidden parent or root must be in the same space as the reply. A public parent needs a public root.",
+      "required": ["root", "parent"],
+      "properties": {
+        "root": { "type": "ref", "ref": "com.atproto.repo.strongRef" },
+        "parent": { "type": "ref", "ref": "com.atproto.repo.strongRef" }
+      }
+    }
+  }
+}

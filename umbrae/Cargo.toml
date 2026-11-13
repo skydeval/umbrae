@@ -1,8 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/umbrae",
     "crates/umbrae-core",
     "crates/umbrae-interop",
+    "crates/umbrae-lexicons",
 ]
 
 [workspace.package]

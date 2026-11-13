@@ -1,0 +1,12 @@
+[package]
+name = "umbrae"
+description = "Rules for Umbrae hidden posts on atproto spaces: where they go and who sees them"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbrae-core = { path = "../umbrae-core" }
+umbrae-lexicons = { path = "../umbrae-lexicons" }

@@ -1,0 +1,15 @@
+[package]
+name = "umbrae-lexicons"
+description = "Lexicons for Umbrae hidden posts (tools.umbrae.*) and their validation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbrae-core = { path = "../umbrae-core" }
+unicode-segmentation = "1.12"
+
+[dev-dependencies]
+serde_json = "1"

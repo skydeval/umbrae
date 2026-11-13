@@ -7,12 +7,14 @@
 //! to our own key, credential-use signatures, KEM key shares and MACs, the
 //! commit, the STAR archive and the operation log. Every check runs our
 //! code against the reference implementation's, in both directions.
+//! Then `umbrae_flow` runs the hidden-post flow with the `umbrae` crates.
 //!
 //! Run by `scripts/interop.sh` on the build machine; never against a public
 //! service.
 
 mod lexjson;
 mod plc;
+mod umbrae_flow;
 
 use p256::ecdsa::SigningKey;
 use rand_core::OsRng;
@@ -740,7 +742,8 @@ fn run(pds: &Pds, dir: &plc::Directory, report: &mut Report) -> Result<(), Strin
             Err(format!("HTTP {} {}", r.status, r.error_name()))
         },
     );
-    Ok(())
+
+    umbrae_flow::run(pds, dir, report, &alice, &bob, &carol)
 }
 
 fn expect_refusal(r: &Resp, name: Option<&str>) -> Result<String, String> {
