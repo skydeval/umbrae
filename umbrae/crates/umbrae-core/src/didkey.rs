@@ -64,6 +64,52 @@ pub fn is_p256(did: &str) -> bool {
     parse_p256(did).is_ok()
 }
 
+const K256_CODEC: [u8; 2] = [0xe7, 0x01];
+
+/// An atproto signing key: P-256 (`ES256`) or secp256k1 (`ES256K`), as an
+/// account's `#atproto` key may be either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnyKey {
+    P256(PublicKey),
+    K256(k256::PublicKey),
+}
+
+impl AnyKey {
+    /// The JWT `alg` this key signs with.
+    pub fn jwt_alg(&self) -> &'static str {
+        match self {
+            AnyKey::P256(_) => "ES256",
+            AnyKey::K256(_) => "ES256K",
+        }
+    }
+}
+
+/// Parse a P-256 or secp256k1 `did:key`.
+pub fn parse_any(did: &str) -> Result<AnyKey, DidKeyError> {
+    let body = did.strip_prefix(PREFIX).ok_or(DidKeyError::Malformed)?;
+    let bytes = bs58::decode(body)
+        .into_vec()
+        .map_err(|_| DidKeyError::Malformed)?;
+    if let Some(key) = bytes.strip_prefix(&K256_CODEC) {
+        if key.len() != 33 {
+            return Err(DidKeyError::InvalidKey);
+        }
+        return k256::PublicKey::from_sec1_bytes(key)
+            .map(AnyKey::K256)
+            .map_err(|_| DidKeyError::InvalidKey);
+    }
+    parse_p256(did).map(AnyKey::P256)
+}
+
+/// Format a secp256k1 public key as a `did:key`, compressed.
+pub fn format_k256(key: &k256::PublicKey) -> String {
+    use k256::elliptic_curve::sec1::ToEncodedPoint as _;
+    let point = key.to_encoded_point(true);
+    let mut bytes = K256_CODEC.to_vec();
+    bytes.extend_from_slice(point.as_bytes());
+    format!("{PREFIX}{}", bs58::encode(bytes).into_string())
+}
+
 /// The uncompressed SEC1 encoding (`04 || x || y`), as HPKE uses.
 pub fn uncompressed(key: &PublicKey) -> [u8; 65] {
     let point = key.to_encoded_point(false);
@@ -96,6 +142,20 @@ mod tests {
         assert_eq!(parse_p256(&did).unwrap(), pk);
         assert!(is_p256(&did));
         assert_eq!(uncompressed(&pk).to_vec(), hex("046c6bb9e1976402c692fef72552f4aaeedd83a5e5079de3d7ae732da0f397b15921fb9c52c9866affc8e29c0271a35937023a9245982ec18bab1eb157cf16fc33"));
+    }
+
+    #[test]
+    fn any_key_handles_both_curves() {
+        let k = parse_any("did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme").unwrap();
+        assert_eq!(k.jwt_alg(), "ES256K");
+        let AnyKey::K256(pk) = k else { panic!() };
+        assert_eq!(
+            format_k256(&pk),
+            "did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme"
+        );
+        let p = parse_any("did:key:zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169").unwrap();
+        assert_eq!(p.jwt_alg(), "ES256");
+        assert!(parse_any("did:key:zDnaExample").is_err());
     }
 
     #[test]
