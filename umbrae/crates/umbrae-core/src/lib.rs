@@ -12,10 +12,16 @@ pub mod cid;
 pub mod commit;
 pub mod drisl;
 pub mod lthash;
+pub mod repo_archive;
+pub mod space_meta;
+pub mod star;
 pub mod uri;
 
 pub use cid::{Cid, CidError, Codec};
 pub use commit::{Commit, CommitError, OpError, RepoOp, COMMIT_HEADER, COMMIT_VERSION};
 pub use drisl::{DrislError, Value};
 pub use lthash::LtHash;
+pub use repo_archive::{RepoArchiveError, RepoArchiveReader, RepoArchiveWriter, RepoEvent};
+pub use space_meta::{SpaceMetaArchive, SpaceMetaError};
+pub use star::{StarDecoder, StarError, StarEvent, StarLimits};
 pub use uri::{SpaceRecordUri, SpaceRef, UriError};
