@@ -18,7 +18,9 @@ Status: early. The standalone design that came before spaces is kept at the `sta
 
 ## Layout
 
-- `crates/umbrae-core`: atproto spaces protocol primitives (no I/O):
+The Rust workspace lives in `umbrae/`.
+
+- `umbrae/crates/umbrae-core`: atproto spaces protocol primitives (no I/O):
   - space URIs;
   - the LtHash set-hash commit digest.
 
@@ -28,7 +30,7 @@ Wire names follow the spaces spec exactly (`com.atproto.space.*` and the rest), 
 
 ## Building
 
-Run `sh scripts/ci.sh` on the build machine.
+On the build machine, from `umbrae/`, run `sh scripts/ci.sh`.
 
 ## License
 
