@@ -10,8 +10,12 @@
 
 pub mod cid;
 pub mod commit;
+pub mod didkey;
 pub mod drisl;
+pub mod httpsig;
+pub mod kem;
 pub mod lthash;
+pub mod mac;
 pub mod repo_archive;
 pub mod space_meta;
 pub mod star;
@@ -20,7 +24,10 @@ pub mod uri;
 pub use cid::{Cid, CidError, Codec};
 pub use commit::{Commit, CommitError, OpError, RepoOp, COMMIT_HEADER, COMMIT_VERSION};
 pub use drisl::{DrislError, Value};
+pub use httpsig::SignatureError;
+pub use kem::Encapsulation;
 pub use lthash::LtHash;
+pub use mac::{MacProfile, MacRequest};
 pub use repo_archive::{RepoArchiveError, RepoArchiveReader, RepoArchiveWriter, RepoEvent};
 pub use space_meta::{SpaceMetaArchive, SpaceMetaError};
 pub use star::{StarDecoder, StarError, StarEvent, StarLimits};

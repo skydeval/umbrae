@@ -9,5 +9,10 @@ rust-version.workspace = true
 
 [dependencies]
 blake3 = "1.5"
+bs58 = "0.5"
+hkdf = "0.12"
+hmac = "0.12"
+p256 = { version = "0.13", features = ["ecdsa", "ecdh"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 sfv = "0.14"
 sha2 = "0.10"
