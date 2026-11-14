@@ -1,4 +1,4 @@
-//! Umbrae: hidden posts on atproto spaces.
+//! Umbrae: hidden posts and private labelers on atproto spaces.
 //!
 //! A hidden post is a `tools.umbrae.post` record in a space whose authority
 //! is the author. A group is a memberspace with its member list published to
@@ -11,13 +11,16 @@
 //! - [`placement`]: which space a reply or like goes into, and the check that
 //!   a public record never points at a hidden one.
 //! - [`access`]: who may see a space, its member list and its records.
+//! - [`labeler`]: private labelers: the space, its policy and readers,
+//!   label signatures, and which labels are in effect.
 //!
 //! Record validation lives in `umbrae-lexicons`; protocol primitives in
 //! `umbrae-core`.
 
 pub mod access;
+pub mod labeler;
 pub mod placement;
 pub mod space;
 
 pub use access::{Members, SpaceState, Tri, ViewContext};
-pub use umbrae_lexicons::SPACE_TYPE;
+pub use umbrae_lexicons::{LABELER_SPACE_TYPE, SPACE_TYPE};

@@ -82,6 +82,34 @@ impl AnyKey {
             AnyKey::K256(_) => "ES256K",
         }
     }
+
+    /// Verify a compact 64-byte ECDSA signature over SHA-256 of `msg`.
+    /// High-S signatures are refused, as atproto requires.
+    pub fn verify_low_s(&self, msg: &[u8], sig: &[u8]) -> bool {
+        if sig.len() != 64 {
+            return false;
+        }
+        match self {
+            AnyKey::P256(pk) => {
+                use p256::ecdsa::signature::Verifier;
+                p256::ecdsa::Signature::from_slice(sig).is_ok_and(|sig| {
+                    sig.normalize_s().is_none()
+                        && p256::ecdsa::VerifyingKey::from(pk)
+                            .verify(msg, &sig)
+                            .is_ok()
+                })
+            }
+            AnyKey::K256(pk) => {
+                use k256::ecdsa::signature::Verifier;
+                k256::ecdsa::Signature::from_slice(sig).is_ok_and(|sig| {
+                    sig.normalize_s().is_none()
+                        && k256::ecdsa::VerifyingKey::from(pk)
+                            .verify(msg, &sig)
+                            .is_ok()
+                })
+            }
+        }
+    }
 }
 
 /// Parse a P-256 or secp256k1 `did:key`.

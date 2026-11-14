@@ -1,6 +1,6 @@
 [package]
 name = "umbrae-lexicons"
-description = "Lexicons for Umbrae hidden posts (tools.umbrae.*) and their validation"
+description = "Lexicons for Umbrae (tools.umbrae.*): hidden posts and private labelers, with validation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

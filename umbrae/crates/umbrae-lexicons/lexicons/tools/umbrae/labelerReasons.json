@@ -1,0 +1,55 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.labelerReasons",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A private labeler's report reasons, so a client can render its report form.",
+      "key": "literal:self",
+      "record": {
+        "type": "object",
+        "required": ["reasons", "createdAt"],
+        "properties": {
+          "reasons": {
+            "type": "array",
+            "maxLength": 500,
+            "items": { "type": "ref", "ref": "#reason" }
+          },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    },
+    "reason": {
+      "type": "object",
+      "required": ["type", "locales"],
+      "properties": {
+        "type": {
+          "type": "ref",
+          "ref": "com.atproto.moderation.defs#reasonType",
+          "description": "The reason code a report carries."
+        },
+        "locales": {
+          "type": "array",
+          "items": { "type": "ref", "ref": "#reasonStrings" }
+        }
+      }
+    },
+    "reasonStrings": {
+      "type": "object",
+      "required": ["lang", "title", "description"],
+      "properties": {
+        "lang": { "type": "string", "format": "language" },
+        "title": {
+          "type": "string",
+          "maxGraphemes": 64,
+          "maxLength": 640
+        },
+        "description": {
+          "type": "string",
+          "maxGraphemes": 10000,
+          "maxLength": 100000
+        }
+      }
+    }
+  }
+}

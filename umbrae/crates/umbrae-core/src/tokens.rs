@@ -287,28 +287,7 @@ pub fn verify_signature(parsed: &Parsed, key: &AnyKey) -> Result<(), TokenError>
     if parsed.header.alg != key.jwt_alg() || parsed.signature.len() != 64 {
         return Err(TokenError::BadJwtSignature);
     }
-    let msg = parsed.signing_input.as_bytes();
-    let ok = match key {
-        AnyKey::P256(pk) => {
-            use p256::ecdsa::signature::Verifier;
-            p256::ecdsa::Signature::from_slice(&parsed.signature).is_ok_and(|sig| {
-                sig.normalize_s().is_none()
-                    && p256::ecdsa::VerifyingKey::from(pk)
-                        .verify(msg, &sig)
-                        .is_ok()
-            })
-        }
-        AnyKey::K256(pk) => {
-            use k256::ecdsa::signature::Verifier;
-            k256::ecdsa::Signature::from_slice(&parsed.signature).is_ok_and(|sig| {
-                sig.normalize_s().is_none()
-                    && k256::ecdsa::VerifyingKey::from(pk)
-                        .verify(msg, &sig)
-                        .is_ok()
-            })
-        }
-    };
-    if ok {
+    if key.verify_low_s(parsed.signing_input.as_bytes(), &parsed.signature) {
         Ok(())
     } else {
         Err(TokenError::BadJwtSignature)
@@ -376,8 +355,9 @@ impl Signer {
         }
     }
 
-    /// A compact, low-S signature.
-    fn sign(&self, msg: &[u8]) -> [u8; 64] {
+    /// A compact, low-S ECDSA signature over SHA-256 of `msg`, as atproto
+    /// signs JWTs, commits and labels.
+    pub fn sign(&self, msg: &[u8]) -> [u8; 64] {
         let bytes = match self {
             Signer::P256(k) => {
                 use p256::ecdsa::signature::Signer as _;

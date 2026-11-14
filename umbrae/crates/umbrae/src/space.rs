@@ -58,6 +58,8 @@ pub enum Misconfigured {
     /// A group must publish its policy and member list to its members.
     Unpublished,
     WrongPolicy,
+    /// A labeler space must name the apps allowed to read it.
+    NoAllowedApps,
 }
 
 /// Check that `policy` is what Umbrae expects for `space`. A client checks

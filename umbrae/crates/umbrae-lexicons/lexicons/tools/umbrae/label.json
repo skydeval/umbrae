@@ -1,0 +1,59 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.label",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "One label from a private labeler, with the fields of com.atproto.label.defs#label. Append-only: each apply or negation is a new record. The current state for a (src, uri, cid, val) is the latest record by cts, then by record key. Deleting a record is a purge: it counts as never written.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["src", "uri", "val", "cts"],
+        "properties": {
+          "ver": {
+            "type": "integer",
+            "description": "The AT Protocol version of the label object. 1."
+          },
+          "src": {
+            "type": "string",
+            "format": "did",
+            "description": "The labeler: always the space authority."
+          },
+          "uri": {
+            "type": "string",
+            "format": "uri",
+            "description": "AT URI of the public record or account labelled, or an account DID. Never a space URI."
+          },
+          "cid": {
+            "type": "string",
+            "format": "cid",
+            "description": "Optionally, the version of the record this label applies to."
+          },
+          "val": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "The label value."
+          },
+          "neg": {
+            "type": "boolean",
+            "description": "If true, this negates an earlier label with the same src, uri, cid and val."
+          },
+          "cts": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When the label was created."
+          },
+          "exp": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When the label stops applying."
+          },
+          "sig": {
+            "type": "bytes",
+            "description": "The standard label signature with the labeler's #atproto_label key: over the DRISL encoding of the label without sig (and without $type), with neg omitted unless true."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.labeler",
+  "defs": {
+    "main": {
+      "type": "space",
+      "description": "A private labeler: its labels, profile, label definitions and report reasons, readable only by the reader accounts it admits through the apps it allows. The labeler's DID is the space authority and the key is self. The space is a memberspace that is neither publicly readable nor publicly writable, with allowedApps set and the policy published. Only the authority's records count.",
+      "key": "literal:self",
+      "title": "Umbrae labeler",
+      "collections": [
+        "tools.umbrae.label",
+        "tools.umbrae.labelerProfile",
+        "tools.umbrae.labelerPolicies",
+        "tools.umbrae.labelerReasons"
+      ]
+    }
+  }
+}

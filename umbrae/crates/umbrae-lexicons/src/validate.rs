@@ -304,7 +304,7 @@ fn mentions_space_uri(v: &Value) -> bool {
 
 /// An optional string field with lexicon `minLength`/`maxLength` (UTF-8
 /// bytes) and `maxGraphemes`.
-fn string(
+pub(crate) fn string(
     m: &Map,
     key: &str,
     min: usize,
@@ -389,7 +389,7 @@ pub(crate) fn is_datetime(s: &str) -> bool {
 
 /// A loose BCP 47 check: alphanumeric subtags joined by `-`, primary
 /// subtag 2–3 letters (or `i`/`x`).
-fn is_language(s: &str) -> bool {
+pub(crate) fn is_language(s: &str) -> bool {
     let mut parts = s.split('-');
     let first = parts.next().unwrap_or("");
     let first_ok = (first.len() == 1 && (first == "i" || first == "x"))
