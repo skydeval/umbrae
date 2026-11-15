@@ -14,17 +14,26 @@
 //! and expired ones. A deleted record counts as never written.
 //!
 //! Labels carry the standard label signature ([`sign_label`],
-//! [`verify_label`]) with the labeler's `#atproto_label` key.
+//! [`verify_label`]), by the key in the labeler's policies record
+//! ([`LabelKeys`]) or, failing that, its DID document's `#atproto_label`.
+//!
+//! Who sees a label ([`can_view_label`]): everyone the serving app shows
+//! the labeler to, unless the label names an audience (then only its
+//! members, from [`Audiences`]) or is on a hidden post (then only those
+//! who may see the post). Both apply when both are set.
 
 use crate::access::{can_view_record, SpaceState, ViewContext};
 use crate::space::Misconfigured;
-use std::collections::BTreeMap;
-use umbrae_core::didkey::AnyKey;
+use std::collections::{BTreeMap, BTreeSet};
+use umbrae_core::didkey::{self, AnyKey};
 use umbrae_core::drisl::{self, Value};
 use umbrae_core::policy::{MemberAccess, MemberPolicy, Policy};
 use umbrae_core::tokens::Signer;
 use umbrae_core::uri::{SpaceRecordUri, SpaceRef, UriError};
-use umbrae_lexicons::{label_subject, Label, LabelSubject, LABELER_SPACE_TYPE, SELF_RKEY};
+use umbrae_lexicons::{
+    label_subject, Label, LabelSubject, LabelerAudience, LabelerPolicies, LABELER_SPACE_TYPE,
+    SELF_RKEY,
+};
 
 /// The labeler's space.
 pub fn labeler_space(labeler: &str) -> Result<SpaceRef, UriError> {
@@ -79,7 +88,8 @@ pub fn check_labeler_policy(space: &SpaceRef, policy: &Policy) -> Result<(), Mis
 
 /// The bytes a label signature covers: the DRISL encoding of the label
 /// without `sig` or `$type`, with `ver` defaulting to 1 and `neg` omitted
-/// unless true (as the reference labeler signs).
+/// unless true (as the reference labeler signs), and `audience` included
+/// exactly when set, so a copy can't shed its restriction.
 pub fn label_signing_bytes(label: &Label) -> Vec<u8> {
     let mut m = BTreeMap::new();
     m.insert("ver".to_owned(), Value::Integer(label.ver.unwrap_or(1)));
@@ -96,10 +106,13 @@ pub fn label_signing_bytes(label: &Label) -> Vec<u8> {
     if let Some(exp) = &label.exp {
         m.insert("exp".to_owned(), Value::Text(exp.clone()));
     }
+    if let Some(a) = &label.audience {
+        m.insert("audience".to_owned(), Value::Text(a.clone()));
+    }
     drisl::encode(&Value::Map(m)).expect("a label of strings always encodes")
 }
 
-/// Sign a label with the labeler's `#atproto_label` key.
+/// Sign a label with the labeler's label key.
 pub fn sign_label(label: &Label, key: &Signer) -> Vec<u8> {
     key.sign(&label_signing_bytes(label)).to_vec()
 }
@@ -113,21 +126,48 @@ pub fn hidden_post_of(label: &Label) -> Option<SpaceRecordUri> {
     }
 }
 
+/// A labeler's audiences, from its `tools.umbrae.labelerAudience` records.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Audiences(BTreeMap<String, BTreeSet<String>>);
+
+impl Audiences {
+    pub fn from_records<'a>(records: impl IntoIterator<Item = &'a LabelerAudience>) -> Self {
+        Self(
+            records
+                .into_iter()
+                .map(|a| (a.id.clone(), a.members.clone()))
+                .collect(),
+        )
+    }
+
+    /// Whether `did` is in audience `id`. An unknown audience has no one.
+    pub fn allows(&self, id: &str, did: &str) -> bool {
+        self.0.get(id).is_some_and(|m| m.contains(did))
+    }
+}
+
 /// Whether `viewer` may see `label`, given that they may see the labeler
 /// at all (which the serving app decides).
 ///
-/// - On a public subject: yes.
-/// - On a hidden post: only if they may see that post. `post_space` is the
-///   state of the post's space; without it, no (fail closed).
+/// - With an audience: only its members; an unknown audience, nobody.
+/// - On an account or a public record: no further condition.
+/// - On a hidden post: also only if they may see that post. `post_space` is
+///   the state of the post's space; without it, no (fail closed).
 /// - On anything else: no.
 pub fn can_view_label(
     viewer: Option<&str>,
     label: &Label,
     post_space: Option<&SpaceState>,
+    audiences: &Audiences,
     ctx: &impl ViewContext,
 ) -> bool {
+    if let Some(a) = &label.audience {
+        if !viewer.is_some_and(|v| audiences.allows(a, v)) {
+            return false;
+        }
+    }
     match label_subject(&label.uri) {
-        Some(LabelSubject::Public) => true,
+        Some(LabelSubject::Account(_) | LabelSubject::Record(_)) => true,
         Some(LabelSubject::HiddenPost(uri)) => {
             post_space.is_some_and(|s| can_view_record(viewer, &uri, s, ctx))
         }
@@ -141,6 +181,70 @@ pub fn verify_label(label: &Label, key: &AnyKey) -> bool {
         .sig
         .as_ref()
         .is_some_and(|sig| key.verify_low_s(&label_signing_bytes(label), sig))
+}
+
+/// The keys a labeler's labels verify against: the current one, and keys
+/// retired by routine rotation, each good only for labels created before
+/// it was retired.
+#[derive(Debug, Clone, Default)]
+pub struct LabelKeys {
+    current: Option<AnyKey>,
+    retired: Vec<(AnyKey, i128)>,
+}
+
+impl LabelKeys {
+    /// From the policies record. Keys that don't parse are left out (the
+    /// lexicon check refuses them first).
+    pub fn from_policies(p: &LabelerPolicies) -> Self {
+        Self {
+            current: p
+                .label_key
+                .as_deref()
+                .and_then(|k| didkey::parse_any(k).ok()),
+            retired: p
+                .previous_label_keys
+                .iter()
+                .filter_map(|r| {
+                    Some((
+                        didkey::parse_any(&r.key).ok()?,
+                        parse_datetime_ns(&r.retired_at)?,
+                    ))
+                })
+                .collect(),
+        }
+    }
+
+    /// Just one key, such as the DID document's `#atproto_label`.
+    pub fn single(key: AnyKey) -> Self {
+        Self {
+            current: Some(key),
+            retired: Vec::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.current.is_none()
+    }
+}
+
+/// Whether the label verifies against `keys`: by the current key, or by a
+/// retired key if the label's `cts` is before that key's retirement. `cts`
+/// is the signer's claim, so a leaked retired key can still backdate; a
+/// compromised key must not be listed.
+pub fn verify_label_with(label: &Label, keys: &LabelKeys) -> bool {
+    if keys
+        .current
+        .as_ref()
+        .is_some_and(|k| verify_label(label, k))
+    {
+        return true;
+    }
+    let Some(cts) = parse_datetime_ns(&label.cts) else {
+        return false;
+    };
+    keys.retired
+        .iter()
+        .any(|(k, retired)| cts < *retired && verify_label(label, k))
 }
 
 /// The labels in effect at `now_ms` (Unix milliseconds), from a labeler's
@@ -253,6 +357,7 @@ mod tests {
             cts: cts.into(),
             exp: None,
             sig: None,
+            audience: None,
         }
     }
 
@@ -492,28 +597,210 @@ mod tests {
         let on_post = label(&post.to_string(), "spam", "2026-11-14T08:00:00.000Z");
         let on_public = label(POST_A, "spam", "2026-11-14T08:00:00.000Z");
         let c = Everyone;
+        let none = Audiences::default();
 
         assert_eq!(hidden_post_of(&on_post), Some(post.clone()));
         assert_eq!(hidden_post_of(&on_public), None);
         // Members of the post's group see the label; others don't.
-        assert!(can_view_label(Some(BOB), &on_post, Some(&state), &c));
-        assert!(can_view_label(Some(ALICE), &on_post, Some(&state), &c));
-        assert!(!can_view_label(Some(CAROL), &on_post, Some(&state), &c));
-        assert!(!can_view_label(None, &on_post, Some(&state), &c));
+        assert!(can_view_label(Some(BOB), &on_post, Some(&state), &none, &c));
+        assert!(can_view_label(
+            Some(ALICE),
+            &on_post,
+            Some(&state),
+            &none,
+            &c
+        ));
+        assert!(!can_view_label(
+            Some(CAROL),
+            &on_post,
+            Some(&state),
+            &none,
+            &c
+        ));
+        assert!(!can_view_label(None, &on_post, Some(&state), &none, &c));
         // Without the post's space state, or with the wrong one: hidden.
-        assert!(!can_view_label(Some(BOB), &on_post, None, &c));
+        assert!(!can_view_label(Some(BOB), &on_post, None, &none, &c));
         let other = SpaceState::new(
             crate::space::group_space(ALICE, "3mbbbbbbbbbb3").unwrap(),
             Some(crate::space::group_policy(None)),
         );
-        assert!(!can_view_label(Some(BOB), &on_post, Some(&other), &c));
+        assert!(!can_view_label(
+            Some(BOB),
+            &on_post,
+            Some(&other),
+            &none,
+            &c
+        ));
         // Public subjects are as visible as the labeler.
-        assert!(can_view_label(Some(CAROL), &on_public, None, &c));
+        assert!(can_view_label(Some(CAROL), &on_public, None, &none, &c));
         // A label that slipped past validation, on a like: never shown.
         let like = space
             .record(BOB, umbrae_lexicons::LIKE, "3mbaaaaaaaaa3")
             .unwrap();
         let on_like = label(&like.to_string(), "spam", "2026-11-14T08:00:00.000Z");
-        assert!(!can_view_label(Some(BOB), &on_like, Some(&state), &c));
+        assert!(!can_view_label(
+            Some(BOB),
+            &on_like,
+            Some(&state),
+            &none,
+            &c
+        ));
+    }
+
+    fn audience(id: &str, members: &[&str]) -> LabelerAudience {
+        LabelerAudience {
+            id: id.into(),
+            name: None,
+            members: members.iter().map(|m| m.to_string()).collect(),
+            created_at: "2026-11-14T08:00:00.000Z".into(),
+        }
+    }
+
+    #[test]
+    fn restricted_labels_show_only_to_their_audience() {
+        const ALICE: &str = "did:plc:aliceaaaaaaaaaaaaaaaaaaa";
+        const BOB: &str = "did:plc:bobbbbbbbbbbbbbbbbbbbbbb";
+        const MOD: &str = "did:plc:moddddddddddddddddddddddd";
+        const AUD: &str = "3mbaaaaaaaab2";
+        let c = Everyone;
+        let audiences = Audiences::from_records([&audience(AUD, &[MOD])]);
+        let mut on_account = label(
+            "did:plc:carolcccccccccccccccccccc",
+            "spam",
+            "2026-11-14T08:00:00.000Z",
+        );
+        on_account.audience = Some(AUD.into());
+        assert!(can_view_label(Some(MOD), &on_account, None, &audiences, &c));
+        assert!(!can_view_label(
+            Some(BOB),
+            &on_account,
+            None,
+            &audiences,
+            &c
+        ));
+        assert!(!can_view_label(None, &on_account, None, &audiences, &c));
+        // An audience that doesn't exist (or was deleted): nobody.
+        let gone = Audiences::default();
+        assert!(!can_view_label(Some(MOD), &on_account, None, &gone, &c));
+        let mut elsewhere = on_account.clone();
+        elsewhere.audience = Some("3mbaaaaaaaab3".into());
+        assert!(!can_view_label(Some(MOD), &elsewhere, None, &audiences, &c));
+
+        // On a hidden post: in the audience AND able to see the post.
+        let space = crate::space::group_space(ALICE, "3mbbbbbbbbbb2").unwrap();
+        let mut state = SpaceState::new(space.clone(), Some(crate::space::group_policy(None)));
+        state.members.insert(
+            BOB,
+            MemberAccess {
+                read: true,
+                write: true,
+            },
+        );
+        let post = space
+            .record(ALICE, umbrae_lexicons::POST, "3mbaaaaaaaaa2")
+            .unwrap();
+        let mut on_post = label(&post.to_string(), "spam", "2026-11-14T08:00:00.000Z");
+        on_post.audience = Some(AUD.into());
+        let both = Audiences::from_records([&audience(AUD, &[MOD, BOB])]);
+        assert!(can_view_label(Some(BOB), &on_post, Some(&state), &both, &c));
+        // In the audience but not the group.
+        assert!(!can_view_label(
+            Some(MOD),
+            &on_post,
+            Some(&state),
+            &both,
+            &c
+        ));
+        // In the group but not the audience.
+        assert!(!can_view_label(
+            Some(BOB),
+            &on_post,
+            Some(&state),
+            &audiences,
+            &c
+        ));
+    }
+
+    #[test]
+    fn the_audience_is_signed_when_set() {
+        let signer = Signer::K256(k256::ecdsa::SigningKey::random(&mut OsRng));
+        let key = didkey::parse_any(&signer.did_key()).unwrap();
+        let plain = label(POST_A, "spam", "2026-11-14T09:00:00.000Z");
+        let mut restricted = plain.clone();
+        restricted.audience = Some("3mbaaaaaaaab2".into());
+        // Without an audience, the bytes are as before.
+        let m = drisl::decode(&label_signing_bytes(&plain)).unwrap();
+        assert!(!m.as_map().unwrap().contains_key("audience"));
+        restricted.sig = Some(sign_label(&restricted, &signer));
+        assert!(verify_label(&restricted, &key));
+        // Stripping or changing the audience breaks the signature.
+        let mut stripped = restricted.clone();
+        stripped.audience = None;
+        assert!(!verify_label(&stripped, &key));
+        let mut moved = restricted.clone();
+        moved.audience = Some("3mbaaaaaaaab3".into());
+        assert!(!verify_label(&moved, &key));
+    }
+
+    #[test]
+    fn retired_keys_verify_only_older_labels() {
+        let old = Signer::K256(k256::ecdsa::SigningKey::random(&mut OsRng));
+        let new = Signer::P256(p256::ecdsa::SigningKey::random(&mut OsRng));
+        let policies = umbrae_lexicons::LabelerPolicies {
+            label_values: vec![],
+            policies: BTreeMap::new(),
+            reason_types: None,
+            subject_types: None,
+            subject_collections: None,
+            label_key: Some(new.did_key()),
+            previous_label_keys: vec![umbrae_lexicons::RetiredKey {
+                key: old.did_key(),
+                retired_at: "2026-11-14T09:00:00.000Z".into(),
+            }],
+            created_at: "2026-11-14T08:00:00.000Z".into(),
+        };
+        let keys = LabelKeys::from_policies(&policies);
+        let signed = |cts: &str, by: &Signer| {
+            let mut l = label(POST_A, "spam", cts);
+            l.sig = Some(sign_label(&l, by));
+            l
+        };
+        // The current key verifies any label.
+        assert!(verify_label_with(
+            &signed("2026-11-14T08:00:00.000Z", &new),
+            &keys
+        ));
+        assert!(verify_label_with(
+            &signed("2026-11-14T10:00:00.000Z", &new),
+            &keys
+        ));
+        // The retired key only before it was retired.
+        assert!(verify_label_with(
+            &signed("2026-11-14T08:59:59.999Z", &old),
+            &keys
+        ));
+        assert!(!verify_label_with(
+            &signed("2026-11-14T09:00:00.000Z", &old),
+            &keys
+        ));
+        assert!(!verify_label_with(
+            &signed("2026-11-14T10:00:00.000Z", &old),
+            &keys
+        ));
+        // Neither key: no.
+        let other = Signer::K256(k256::ecdsa::SigningKey::random(&mut OsRng));
+        assert!(!verify_label_with(
+            &signed("2026-11-14T08:00:00.000Z", &other),
+            &keys
+        ));
+        assert!(!verify_label_with(
+            &signed("2026-11-14T08:00:00.000Z", &new),
+            &LabelKeys::default()
+        ));
+        assert!(LabelKeys::default().is_empty());
+        assert!(verify_label_with(
+            &signed("2026-11-14T08:00:00.000Z", &other),
+            &LabelKeys::single(didkey::parse_any(&other.did_key()).unwrap())
+        ));
     }
 }

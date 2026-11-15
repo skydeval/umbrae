@@ -48,9 +48,14 @@
             "format": "datetime",
             "description": "When the label stops applying."
           },
+          "audience": {
+            "type": "string",
+            "format": "tid",
+            "description": "The record key of a tools.umbrae.labelerAudience: the label is shown only to its members (and, on a hidden post, only to those who may also see the post). Unknown means shown to nobody. Covered by sig when set."
+          },
           "sig": {
             "type": "bytes",
-            "description": "The standard label signature with the labeler's #atproto_label key: over the DRISL encoding of the label without sig (and without $type), with neg omitted unless true."
+            "description": "The standard label signature, by the labeler's label key (labelKey in tools.umbrae.labelerPolicies): over the DRISL encoding of the label without sig (and without $type), with ver defaulting to 1, neg omitted unless true, and audience included only when set."
           }
         }
       }

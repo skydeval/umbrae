@@ -191,7 +191,8 @@ impl Policy {
     }
 
     /// Whether the policy is published as a `com.atproto.space.policy`
-    /// record in the authority's repo.
+    /// record in the authority's repo **in the space**: readable only by
+    /// the space's readers, never in the account's public repo.
     pub fn is_published(&self) -> bool {
         match self {
             Policy::Personal => false,
@@ -200,7 +201,8 @@ impl Policy {
         }
     }
 
-    /// Whether the member list is published as member records.
+    /// Whether the member list is published as member records, likewise in
+    /// the space.
     pub fn members_published(&self) -> bool {
         matches!(self, Policy::Member(p) if p.publish_members)
     }

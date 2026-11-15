@@ -7,15 +7,20 @@
 //!   or a DID), or a hidden post (a `tools.umbrae.post` in a
 //!   `tools.umbrae.space` space); nothing else from inside a space;
 //! - the profile, policies and reasons records sit at rkey `self`;
-//! - a reason's `group`, if set, is one of the record's `groups`.
+//! - labels and audiences are keyed by TID, and a label's `audience` names
+//!   an audience's key;
+//! - a reason's `group`, if set, is one of the record's `groups`;
+//! - label keys are valid `did:key`s, unique, and previous keys need a
+//!   current one.
 
 use crate::validate::{is_datetime, is_language, string, Invalid, PublicUri};
 use crate::{
-    LABEL, LABELER_POLICIES, LABELER_PROFILE, LABELER_REASONS, LABELER_SPACE_TYPE, POST, SELF_RKEY,
-    SPACE_TYPE,
+    LABEL, LABELER_AUDIENCE, LABELER_POLICIES, LABELER_PROFILE, LABELER_REASONS,
+    LABELER_SPACE_TYPE, POST, SELF_RKEY, SPACE_TYPE,
 };
 use std::collections::BTreeMap;
 use umbrae_core::cid::Cid;
+use umbrae_core::didkey;
 use umbrae_core::drisl::Value;
 use umbrae_core::uri::{is_space_uri, is_valid_did, is_valid_nsid, is_valid_tid, SpaceRecordUri};
 
@@ -33,6 +38,9 @@ pub struct Label {
     pub cts: String,
     pub exp: Option<String>,
     pub sig: Option<Vec<u8>>,
+    /// The id (record key) of the `tools.umbrae.labelerAudience` that may
+    /// see this label. `None`: everyone the labeler is shown to.
+    pub audience: Option<String>,
 }
 
 /// The parts of a blob reference a reader needs.
@@ -62,6 +70,31 @@ pub struct LabelerPolicies {
     pub reason_types: Option<Vec<String>>,
     pub subject_types: Option<Vec<String>>,
     pub subject_collections: Option<Vec<String>>,
+    /// The key that signs labels now (a `did:key`), so readers need no
+    /// `#atproto_label` entry in the labeler's public DID document.
+    pub label_key: Option<String>,
+    /// Keys that signed labels before a rotation.
+    pub previous_label_keys: Vec<RetiredKey>,
+    pub created_at: String,
+}
+
+/// A label key retired at `retired_at`: it verifies only labels whose `cts`
+/// is earlier. `cts` is chosen by the signer, so this doesn't stop someone
+/// holding a leaked key from backdating; after a compromise, don't list the
+/// key, and re-sign the current labels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetiredKey {
+    pub key: String,
+    pub retired_at: String,
+}
+
+/// A permitted list of accounts for restricted labels, managed by the
+/// labeler's operator. Its record key is its id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelerAudience {
+    pub id: String,
+    pub name: Option<String>,
+    pub members: std::collections::BTreeSet<String>,
     pub created_at: String,
 }
 
@@ -98,8 +131,10 @@ pub struct LabelerReasons {
 /// What a label is on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LabelSubject {
-    /// A public account or record.
-    Public,
+    /// An account, by DID (from a bare DID or `at://did`).
+    Account(String),
+    /// A public record.
+    Record(PublicUri),
     /// A hidden post. Show the label only to viewers who may see the post.
     HiddenPost(SpaceRecordUri),
 }
@@ -110,6 +145,7 @@ pub enum LabelerRecord {
     Profile(LabelerProfile),
     Policies(LabelerPolicies),
     Reasons(LabelerReasons),
+    Audience(LabelerAudience),
 }
 
 /// Validate a record synced from a labeler space, given its full URI.
@@ -125,7 +161,15 @@ pub fn validate_labeler_record(
         return Err(Invalid("not a tools.umbrae.labeler space"));
     }
     let collection = uri.collection();
-    if ![LABEL, LABELER_PROFILE, LABELER_POLICIES, LABELER_REASONS].contains(&collection) {
+    if ![
+        LABEL,
+        LABELER_PROFILE,
+        LABELER_POLICIES,
+        LABELER_REASONS,
+        LABELER_AUDIENCE,
+    ]
+    .contains(&collection)
+    {
         return Ok(None);
     }
     if uri.author() != space.authority() {
@@ -135,9 +179,12 @@ pub fn validate_labeler_record(
         Some(Value::Text(t)) if t == collection => {}
         _ => return Err(Invalid("$type must match the collection")),
     }
-    if collection == LABEL {
+    if collection == LABEL || collection == LABELER_AUDIENCE {
         if !is_valid_tid(uri.rkey()) {
             return Err(Invalid("record key must be a TID"));
+        }
+        if collection == LABELER_AUDIENCE {
+            return Ok(Some(LabelerRecord::Audience(audience(uri.rkey(), value)?)));
         }
         return Ok(Some(LabelerRecord::Label(Box::new(label(
             value,
@@ -177,7 +224,14 @@ pub fn is_public_subject(uri: &str) -> bool {
 /// without a record, or anything in another space type isn't allowed.
 pub fn label_subject(uri: &str) -> Option<LabelSubject> {
     if !is_space_uri(uri) {
-        return is_public_subject(uri).then_some(LabelSubject::Public);
+        if is_valid_did(uri) {
+            return Some(LabelSubject::Account(uri.to_owned()));
+        }
+        return match uri.strip_prefix("at://") {
+            Some(did) if is_valid_did(did) => Some(LabelSubject::Account(did.to_owned())),
+            Some(_) => PublicUri::parse(uri).map(LabelSubject::Record),
+            None => None,
+        };
     }
     let u = SpaceRecordUri::parse(uri).ok()?;
     (u.space().space_type() == SPACE_TYPE && u.collection() == POST)
@@ -217,7 +271,12 @@ fn label(m: &Map, authority: &str) -> Result<Label, Invalid> {
         Some(Value::Bytes(b)) => Some(b.clone()),
         Some(_) => return Err(Invalid("label sig must be bytes")),
     };
+    let audience = text(m, "audience")?;
+    if audience.as_deref().is_some_and(|a| !is_valid_tid(a)) {
+        return Err(Invalid("label audience must be an audience's record key"));
+    }
     Ok(Label {
+        audience,
         ver,
         src,
         uri,
@@ -304,12 +363,82 @@ fn policies(m: &Map) -> Result<LabelerPolicies, Invalid> {
         }
         Some(_) => return Err(Invalid("labelValueDefinitions must be an array")),
     }
+    let label_key = text(m, "labelKey")?;
+    if label_key
+        .as_deref()
+        .is_some_and(|k| didkey::parse_any(k).is_err())
+    {
+        return Err(Invalid("labelKey must be a P-256 or secp256k1 did:key"));
+    }
+    let previous_label_keys = retired_keys(m, label_key.as_deref())?;
     Ok(LabelerPolicies {
         label_values,
         policies: p.clone(),
         reason_types: strings(m, "reasonTypes", |_| true)?,
         subject_types: strings(m, "subjectTypes", |_| true)?,
         subject_collections: strings(m, "subjectCollections", is_valid_nsid)?,
+        label_key,
+        previous_label_keys,
+        created_at: created_at(m)?,
+    })
+}
+
+const MAX_RETIRED_KEYS: usize = 10;
+
+fn retired_keys(m: &Map, current: Option<&str>) -> Result<Vec<RetiredKey>, Invalid> {
+    let list = match m.get("previousLabelKeys") {
+        None => return Ok(Vec::new()),
+        Some(Value::Array(a)) if a.len() <= MAX_RETIRED_KEYS => a,
+        Some(_) => return Err(Invalid("previousLabelKeys must be an array of at most 10")),
+    };
+    let Some(current) = current else {
+        return Err(Invalid("previousLabelKeys needs a labelKey"));
+    };
+    let mut seen = std::collections::BTreeSet::from([current.to_owned()]);
+    list.iter()
+        .map(|e| {
+            let e = match e {
+                Value::Map(e) => e,
+                _ => return Err(Invalid("a previous label key must be an object")),
+            };
+            let key = text(e, "key")?.ok_or(Invalid("a previous label key needs key"))?;
+            if didkey::parse_any(&key).is_err() {
+                return Err(Invalid(
+                    "a previous label key must be a P-256 or secp256k1 did:key",
+                ));
+            }
+            if !seen.insert(key.clone()) {
+                return Err(Invalid("label keys must be unique"));
+            }
+            let retired_at =
+                datetime(e, "retiredAt")?.ok_or(Invalid("a previous label key needs retiredAt"))?;
+            Ok(RetiredKey { key, retired_at })
+        })
+        .collect()
+}
+
+const MAX_AUDIENCE_MEMBERS: usize = 5000;
+
+fn audience(id: &str, m: &Map) -> Result<LabelerAudience, Invalid> {
+    let list = match m.get("members") {
+        Some(Value::Array(a)) if a.len() <= MAX_AUDIENCE_MEMBERS => a,
+        _ => return Err(Invalid("members must be an array of at most 5000")),
+    };
+    let mut members = std::collections::BTreeSet::new();
+    for v in list {
+        match v {
+            Value::Text(d) if is_valid_did(d) => {
+                if !members.insert(d.clone()) {
+                    return Err(Invalid("audience members must be unique"));
+                }
+            }
+            _ => return Err(Invalid("audience members must be DIDs")),
+        }
+    }
+    Ok(LabelerAudience {
+        id: id.to_owned(),
+        name: string(m, "name", 0, 640, 64)?,
+        members,
         created_at: created_at(m)?,
     })
 }
@@ -572,7 +701,22 @@ mod tests {
             label_subject(&post.to_string()),
             Some(LabelSubject::HiddenPost(post.clone()))
         );
-        assert_eq!(label_subject(SUBJECT), Some(LabelSubject::Public));
+        assert!(matches!(
+            label_subject(SUBJECT),
+            Some(LabelSubject::Record(_))
+        ));
+        assert_eq!(
+            label_subject("did:plc:carolcccccccccccccccccccc"),
+            Some(LabelSubject::Account(
+                "did:plc:carolcccccccccccccccccccc".into()
+            ))
+        );
+        assert_eq!(
+            label_subject("at://did:plc:carolcccccccccccccccccccc"),
+            Some(LabelSubject::Account(
+                "did:plc:carolcccccccccccccccccccc".into()
+            ))
+        );
         assert!(check(
             LABEL,
             LABELER,
@@ -723,6 +867,113 @@ mod tests {
         let mut no_values = p(vec![]);
         no_values.insert("policies".into(), Value::Map(Map::new()));
         assert!(check(LABELER_POLICIES, LABELER, SELF_RKEY, &no_values).is_err());
+    }
+
+    const K256: &str = "did:key:zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme";
+    const P256: &str = "did:key:zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169";
+
+    #[test]
+    fn label_keys() {
+        let p = |key: Option<&str>, previous: Option<Vec<Value>>| {
+            let mut m = map(&[
+                ("$type", t(LABELER_POLICIES)),
+                (
+                    "policies",
+                    Value::Map(map(&[("labelValues", Value::Array(vec![t("spam")]))])),
+                ),
+                ("createdAt", t(NOW)),
+            ]);
+            if let Some(k) = key {
+                m.insert("labelKey".into(), t(k));
+            }
+            if let Some(prev) = previous {
+                m.insert("previousLabelKeys".into(), Value::Array(prev));
+            }
+            m
+        };
+        let retired = |k: &str| Value::Map(map(&[("key", t(k)), ("retiredAt", t(NOW))]));
+        match check(
+            LABELER_POLICIES,
+            LABELER,
+            SELF_RKEY,
+            &p(Some(P256), Some(vec![retired(K256)])),
+        )
+        .unwrap()
+        .unwrap()
+        {
+            LabelerRecord::Policies(p) => {
+                assert_eq!(p.label_key.as_deref(), Some(P256));
+                assert_eq!(
+                    p.previous_label_keys,
+                    [RetiredKey {
+                        key: K256.into(),
+                        retired_at: NOW.into()
+                    }]
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // No keys at all is fine: the DID document's key, as before.
+        assert!(check(LABELER_POLICIES, LABELER, SELF_RKEY, &p(None, None)).is_ok());
+        let bad = [
+            p(Some("did:key:zNotAKey"), None),
+            p(Some("did:plc:carolcccccccccccccccccccc"), None),
+            p(None, Some(vec![retired(K256)])),
+            p(Some(P256), Some(vec![retired(P256)])),
+            p(Some(P256), Some(vec![retired(K256), retired(K256)])),
+            p(Some(P256), Some(vec![Value::Map(map(&[("key", t(K256))]))])),
+            p(Some(P256), Some(vec![retired(K256); 11])),
+        ];
+        for b in bad {
+            assert!(
+                check(LABELER_POLICIES, LABELER, SELF_RKEY, &b).is_err(),
+                "{b:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn audiences() {
+        let a = |members: Vec<Value>| {
+            map(&[
+                ("$type", t(LABELER_AUDIENCE)),
+                ("name", t("trusted mods")),
+                ("members", Value::Array(members)),
+                ("createdAt", t(NOW)),
+            ])
+        };
+        match check(LABELER_AUDIENCE, LABELER, RKEY, &a(vec![t(BOB)]))
+            .unwrap()
+            .unwrap()
+        {
+            LabelerRecord::Audience(a) => {
+                assert_eq!(a.id, RKEY);
+                assert!(a.members.contains(BOB));
+                assert_eq!(a.name.as_deref(), Some("trusted mods"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(check(LABELER_AUDIENCE, LABELER, RKEY, &a(vec![])).is_ok());
+        assert!(check(LABELER_AUDIENCE, LABELER, "self", &a(vec![t(BOB)])).is_err());
+        assert!(check(LABELER_AUDIENCE, BOB, RKEY, &a(vec![t(BOB)])).is_err());
+        assert!(check(LABELER_AUDIENCE, LABELER, RKEY, &a(vec![t(BOB), t(BOB)])).is_err());
+        assert!(check(LABELER_AUDIENCE, LABELER, RKEY, &a(vec![t("bob")])).is_err());
+        assert!(check(LABELER_AUDIENCE, LABELER, RKEY, &a(vec![t(BOB); 5001])).is_err());
+        // Labels name an audience by its key.
+        match check(LABEL, LABELER, RKEY, &label_with(&[("audience", t(RKEY))]))
+            .unwrap()
+            .unwrap()
+        {
+            LabelerRecord::Label(l) => assert_eq!(l.audience.as_deref(), Some(RKEY)),
+            other => panic!("{other:?}"),
+        }
+        assert!(check(
+            LABEL,
+            LABELER,
+            RKEY,
+            &label_with(&[("audience", t("mods"))])
+        )
+        .is_err());
     }
 
     #[test]

@@ -11,7 +11,8 @@
         "tools.umbrae.label",
         "tools.umbrae.labelerProfile",
         "tools.umbrae.labelerPolicies",
-        "tools.umbrae.labelerReasons"
+        "tools.umbrae.labelerReasons",
+        "tools.umbrae.labelerAudience"
       ]
     }
   }

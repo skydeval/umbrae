@@ -4,8 +4,11 @@
 //! to one client), adds a reader account, and writes its profile, policies,
 //! reasons and signed labels: applications, negations, an expired label
 //! and a purge. The reader syncs as the allowed client, attested with the
-//! key that client publishes. Then the refusals: no attestation, another
-//! client's attestation, a non-member, and non-labeler writes.
+//! key that client publishes. Labels verify against the key in the
+//! labeler's policies record (one through a retired key), and a restricted
+//! label shows only to its audience. Then the refusals: no attestation,
+//! another client's attestation, a non-member, non-labeler writes, and
+//! unauthenticated probes for the space's existence.
 
 use crate::umbrae_flow::{delegation, map, sync};
 use crate::{expect_refusal, Account, Pds, Report};
@@ -16,23 +19,40 @@ use rand_core::OsRng;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use umbrae::labeler::{
-    check_labeler_policy, current_labels, labeler_policy, labeler_space, reader_member, sign_label,
-    verify_label,
+    can_view_label, check_labeler_policy, current_labels, labeler_policy, labeler_space,
+    reader_member, sign_label, verify_label_with, Audiences, LabelKeys,
 };
-use umbrae::LABELER_SPACE_TYPE;
+use umbrae::{Tri, ViewContext, LABELER_SPACE_TYPE};
 use umbrae_core::didkey;
 use umbrae_core::drisl::Value as D;
 use umbrae_core::policy::Policy;
 use umbrae_core::tokens::{self, Signer};
 use umbrae_core::uri::SpaceRef;
 use umbrae_lexicons::{
-    validate_labeler_record, Label, LabelerRecord, LABEL, LABELER_POLICIES, LABELER_PROFILE,
-    LABELER_REASONS, SELF_RKEY,
+    validate_labeler_record, Label, LabelerRecord, LABEL, LABELER_AUDIENCE, LABELER_POLICIES,
+    LABELER_PROFILE, LABELER_REASONS, SELF_RKEY,
 };
 
 const CLIENT_HOST: &str = "https://client.interop.test";
 const CREATED: &str = "2026-11-13T10:00:00.000Z";
+/// The old label key's retirement: after the first label, before the rest.
+const RETIRED: &str = "2026-11-13T10:30:00.000Z";
+const AUDIENCE: &str = "3mbaaaaaaace2";
+/// The audience's only member: never an account here, just a DID.
+const MOD: &str = "did:plc:moddddddddddddddddddddddd";
 const KID: &str = "interop-key-1";
+
+struct Everyone;
+
+impl ViewContext for Everyone {
+    fn is_active(&self, _: &str) -> Tri {
+        Tri::Yes
+    }
+
+    fn blocked(&self, _: &str, _: &str) -> Tri {
+        Tri::No
+    }
+}
 
 /// A client the PDS can resolve: its metadata, with the public half of its
 /// attestation key, written where the TLS server in front of it serves.
@@ -93,6 +113,7 @@ fn label(src: &str, uri: &str, val: &str, cts: &str) -> Label {
         cts: cts.into(),
         exp: None,
         sig: None,
+        audience: None,
     }
 }
 
@@ -104,6 +125,9 @@ fn label_json(l: &Label) -> Value {
     }
     if let Some(exp) = &l.exp {
         v["exp"] = json!(exp);
+    }
+    if let Some(a) = &l.audience {
+        v["audience"] = json!(a);
     }
     if let Some(sig) = &l.sig {
         v["sig"] = json!({ "$bytes": STANDARD_NO_PAD.encode(sig) });
@@ -194,7 +218,10 @@ pub(crate) fn run(
     )?
     .ok("putMembers labeler")?;
 
-    // Profile, policies, reasons, and signed labels.
+    // Profile, policies (with the label key, and one retired key), reasons,
+    // an audience, and signed labels.
+    let label_key = Signer::K256(k256_key());
+    let old_key = Signer::K256(k256_key());
     let write = |who: &Account, collection: &str, rkey: &str, record: &Value| {
         pds.post(
             "com.atproto.space.createRecord",
@@ -216,7 +243,9 @@ pub(crate) fn run(
         LABELER_POLICIES,
         SELF_RKEY,
         &json!({ "$type": LABELER_POLICIES,
-        "policies": { "labelValues": ["spam", "rude", "nudity", "porn", "sexual"],
+        "labelKey": label_key.did_key(),
+        "previousLabelKeys": [{ "key": old_key.did_key(), "retiredAt": RETIRED }],
+        "policies": { "labelValues": ["spam", "rude", "nudity", "porn", "sexual", "graphic-media"],
             "labelValueDefinitions": [{ "identifier": "rude", "severity": "inform", "blurs": "none",
                 "defaultSetting": "warn",
                 "locales": [{ "lang": "en", "name": "Rude", "description": "Rude content" }] }] },
@@ -234,8 +263,14 @@ pub(crate) fn run(
         "createdAt": CREATED }),
     )?
     .ok("reasons")?;
+    write(
+        &labeler,
+        LABELER_AUDIENCE,
+        AUDIENCE,
+        &json!({ "$type": LABELER_AUDIENCE, "name": "trusted mods", "members": [MOD], "createdAt": CREATED }),
+    )?
+    .ok("audience")?;
 
-    let label_key = Signer::K256(k256_key());
     let a = format!("at://{}/app.bsky.feed.post/3mbaaaaaaacce", outsider.did);
     let b = format!("at://{}", outsider.did);
     let mut plan: Vec<(&str, Label)> = Vec::new();
@@ -269,8 +304,18 @@ pub(crate) fn run(
     let mut neg2 = label(src, &b, "sexual", "2026-11-13T11:00:00.000Z");
     neg2.neg = true;
     plan.push(("3mbaaaaaaaccb", neg2));
+    // Restricted to the audience: only MOD may see it.
+    let mut restricted = label(src, &b, "graphic-media", "2026-11-13T12:00:00.000Z");
+    restricted.audience = Some(AUDIENCE.into());
+    plan.push(("3mbaaaaaaaccf", restricted));
     for (rkey, l) in &mut plan {
-        l.sig = Some(sign_label(l, &label_key));
+        // The first label predates the rotation: signed by the old key.
+        let by = if *rkey == "3mbaaaaaaacc2" {
+            &old_key
+        } else {
+            &label_key
+        };
+        l.sig = Some(sign_label(l, by));
         write(&labeler, LABEL, rkey, &label_json(l))?.ok("label")?;
     }
     // A purge: the porn label is deleted outright.
@@ -316,6 +361,8 @@ pub(crate) fn run(
     let records = synced.repos.get(&labeler.did).unwrap_or(&empty);
     let mut kinds = BTreeSet::new();
     let mut labels: Vec<(String, Label)> = Vec::new();
+    let mut policies = None;
+    let mut audiences = Vec::new();
     let mut bad = Vec::new();
     for r in records {
         let uri = space
@@ -330,27 +377,41 @@ pub(crate) fn run(
             Ok(Some(LabelerRecord::Profile(_))) => {
                 kinds.insert("profile");
             }
-            Ok(Some(LabelerRecord::Policies(_))) => {
+            Ok(Some(LabelerRecord::Policies(p))) => {
                 kinds.insert("policies");
+                policies = Some(p);
             }
             Ok(Some(LabelerRecord::Reasons(_))) => {
                 kinds.insert("reasons");
+            }
+            Ok(Some(LabelerRecord::Audience(a))) => {
+                kinds.insert("audience");
+                audiences.push(a);
             }
             Err(e) => bad.push(format!("{} {e}", r.rkey)),
         }
     }
     report.check(
-        "labeler: every synced record validates (profile, policies, reasons, 7 labels after the purge)",
-        if bad.is_empty() && kinds.len() == 4 && labels.len() == 7 {
+        "labeler: every synced record validates (profile, policies, reasons, audience, 8 labels after the purge)",
+        if bad.is_empty() && kinds.len() == 5 && labels.len() == 8 {
             Ok(format!("{kinds:?}"))
         } else {
             Err(format!("{kinds:?} {} labels {bad:?}", labels.len()))
         },
     );
-    let key = didkey::parse_any(&label_key.did_key()).map_err(|e| e.to_string())?;
+    // Verify with the keys from inside the space only, not a DID document.
+    let keys = policies
+        .as_ref()
+        .map(LabelKeys::from_policies)
+        .unwrap_or_default();
+    let by_old = labels.iter().filter(|(k, _)| k == "3mbaaaaaaacc2").count();
     report.check(
-        "labeler: every label's signature verifies after the round trip through the PDS",
-        if labels.len() == 7 && labels.iter().all(|(_, l)| verify_label(l, &key)) {
+        "labeler: every label verifies against the in-space label key, one through a retired key",
+        if labels.len() == 8
+            && by_old == 1
+            && !keys.is_empty()
+            && labels.iter().all(|(_, l)| verify_label_with(l, &keys))
+        {
             Ok(format!("{} signatures", labels.len()))
         } else {
             Err(format!("{} labels, or a signature failed", labels.len()))
@@ -362,11 +423,138 @@ pub(crate) fn run(
         .map(|l| format!("{} {}", if l.uri == a { "post" } else { "account" }, l.val))
         .collect();
     report.check(
-        "labeler: labels in effect are the re-applied spam and rude (negated, expired, purged gone)",
-        if current == ["account rude", "post spam"] {
+        "labeler: labels in effect are the re-applied spam, rude and the restricted one (negated, expired, purged gone)",
+        if current == ["account graphic-media", "account rude", "post spam"] {
             Ok(current.join(", "))
         } else {
             Err(format!("{current:?}"))
+        },
+    );
+    let audiences = Audiences::from_records(&audiences);
+    let restricted = labels
+        .iter()
+        .map(|(_, l)| l)
+        .find(|l| l.audience.is_some())
+        .ok_or("no restricted label synced")?;
+    let open = labels
+        .iter()
+        .map(|(_, l)| l)
+        .find(|l| l.val == "rude")
+        .ok_or("no rude label synced")?;
+    let ctx = Everyone;
+    let views = [
+        can_view_label(Some(MOD), restricted, None, &audiences, &ctx),
+        !can_view_label(
+            Some(reader.did.as_str()),
+            restricted,
+            None,
+            &audiences,
+            &ctx,
+        ),
+        !can_view_label(None, restricted, None, &audiences, &ctx),
+        can_view_label(Some(reader.did.as_str()), open, None, &audiences, &ctx),
+    ];
+    report.check(
+        "labeler: the restricted account label shows only to its audience; the open one to anyone",
+        if views.iter().all(|v| *v) {
+            Ok(format!("{} decisions", views.len()))
+        } else {
+            Err(format!("{views:?}"))
+        },
+    );
+
+    // Nothing outside the space gives the labeler away.
+    let public = pds
+        .get(
+            "com.atproto.repo.describeRepo",
+            &[("repo", &labeler.did)],
+            &vec![],
+        )?
+        .ok("describeRepo")?
+        .json();
+    let collections: Vec<String> = public["collections"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| c.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let listed = pds
+        .get(
+            "com.atproto.repo.listRecords",
+            &[
+                ("repo", &labeler.did),
+                ("collection", "com.atproto.space.policy"),
+            ],
+            &vec![],
+        )?
+        .ok("listRecords")?
+        .json();
+    let none_listed = listed["records"].as_array().is_some_and(|r| r.is_empty());
+    report.check(
+        "labeler: the public repo shows no space policy and no labeler collections",
+        if none_listed
+            && !collections
+                .iter()
+                .any(|c| c.starts_with("tools.umbrae.") || c.starts_with("com.atproto.space"))
+        {
+            Ok(format!("{} public collection(s)", collections.len()))
+        } else {
+            Err(format!("{collections:?} {listed}"))
+        },
+    );
+    let repo = pds.get(
+        "com.atproto.space.getRepo",
+        &[("space", &space_str), ("repo", &labeler.did)],
+        &vec![],
+    )?;
+    let rec = pds.get(
+        "com.atproto.space.getRecord",
+        &[
+            ("space", &space_str),
+            ("repo", &labeler.did),
+            ("collection", "com.atproto.space.policy"),
+            ("rkey", "self"),
+        ],
+        &vec![],
+    )?;
+    report.check(
+        "labeler: the space's repo and its policy record can't be read without auth",
+        match (expect_refusal(&repo, None), expect_refusal(&rec, None)) {
+            (Ok(a), Ok(b)) => Ok(format!("{a}; {b}")),
+            (a, b) => Err(format!("{a:?} {b:?}")),
+        },
+    );
+    let probe = |s: &str| {
+        let key = SigningKey::random(&mut OsRng);
+        pds.post(
+            "com.atproto.space.authorizeSpaceSync",
+            &json!({ "space": s, "credentialKey": didkey::format_p256(&key.verifying_key().into()) }),
+            &vec![],
+        )
+    };
+    let real = probe(&space_str)?;
+    let made_up = probe(
+        &labeler_space(&outsider.did)
+            .map_err(|e| e.to_string())?
+            .to_string(),
+    )?;
+    report.check(
+        "labeler: without a delegation, the labeler space answers exactly as a made-up one",
+        if real.status != 200
+            && real.status == made_up.status
+            && real.error_name() == made_up.error_name()
+        {
+            Ok(format!("both HTTP {} {}", real.status, real.error_name()))
+        } else {
+            Err(format!(
+                "real HTTP {} {}, made-up HTTP {} {}",
+                real.status,
+                real.error_name(),
+                made_up.status,
+                made_up.error_name()
+            ))
         },
     );
 

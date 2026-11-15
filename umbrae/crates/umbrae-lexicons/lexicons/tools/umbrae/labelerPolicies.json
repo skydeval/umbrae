@@ -35,8 +35,26 @@
             "description": "Record collections that can be reported. If not defined (distinct from empty), any.",
             "items": { "type": "string", "format": "nsid" }
           },
+          "labelKey": {
+            "type": "string",
+            "description": "The did:key (P-256 or secp256k1) that signs this labeler's labels now. Published here instead of in the labeler's public DID document, which would mark the account as a labeler."
+          },
+          "previousLabelKeys": {
+            "type": "array",
+            "maxLength": 10,
+            "description": "Keys retired by routine rotation. Each verifies only labels whose cts is before its retiredAt. cts is chosen by the signer, so this is no defence against a leaked key: after a compromise, don't list it, and re-sign current labels. Requires labelKey; keys are unique.",
+            "items": { "type": "ref", "ref": "#retiredKey" }
+          },
           "createdAt": { "type": "string", "format": "datetime" }
         }
+      }
+    },
+    "retiredKey": {
+      "type": "object",
+      "required": ["key", "retiredAt"],
+      "properties": {
+        "key": { "type": "string" },
+        "retiredAt": { "type": "string", "format": "datetime" }
       }
     }
   }

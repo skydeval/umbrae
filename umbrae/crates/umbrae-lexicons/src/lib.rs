@@ -12,6 +12,7 @@
 //! | `tools.umbrae.labelerProfile` | the labeler's name, description and images |
 //! | `tools.umbrae.labelerPolicies` | label values and definitions, report scope |
 //! | `tools.umbrae.labelerReasons` | report reasons, localized |
+//! | `tools.umbrae.labelerAudience` | a permitted list for restricted labels |
 //!
 //! Validation works on decoded DRISL maps, as they come out of a space
 //! repo (STAR archive, `listRepoOps` or `getRecord`). Unknown fields are
@@ -23,8 +24,8 @@ mod validate;
 
 pub use labeler::{
     is_public_subject, label_subject, validate_labeler_record, BlobRef, Label, LabelSubject,
-    LabelerPolicies, LabelerProfile, LabelerReasons, LabelerRecord, Reason, ReasonGroup,
-    ReasonStrings,
+    LabelerAudience, LabelerPolicies, LabelerProfile, LabelerReasons, LabelerRecord, Reason,
+    ReasonGroup, ReasonStrings, RetiredKey,
 };
 pub use validate::{
     validate_record, Group, Invalid, Like, Post, PublicUri, Record, Reply, StrongRef, Target,
@@ -44,6 +45,7 @@ pub const LABEL: &str = "tools.umbrae.label";
 pub const LABELER_PROFILE: &str = "tools.umbrae.labelerProfile";
 pub const LABELER_POLICIES: &str = "tools.umbrae.labelerPolicies";
 pub const LABELER_REASONS: &str = "tools.umbrae.labelerReasons";
+pub const LABELER_AUDIENCE: &str = "tools.umbrae.labelerAudience";
 
 /// Every Umbrae lexicon document, by NSID.
 pub const LEXICONS: &[(&str, &str)] = &[
@@ -70,6 +72,10 @@ pub const LEXICONS: &[(&str, &str)] = &[
     (
         LABELER_REASONS,
         include_str!("../lexicons/tools/umbrae/labelerReasons.json"),
+    ),
+    (
+        LABELER_AUDIENCE,
+        include_str!("../lexicons/tools/umbrae/labelerAudience.json"),
     ),
 ];
 
@@ -124,7 +130,13 @@ mod tests {
             .collect();
         assert_eq!(
             cols,
-            [LABEL, LABELER_PROFILE, LABELER_POLICIES, LABELER_REASONS]
+            [
+                LABEL,
+                LABELER_PROFILE,
+                LABELER_POLICIES,
+                LABELER_REASONS,
+                LABELER_AUDIENCE
+            ]
         );
     }
 }

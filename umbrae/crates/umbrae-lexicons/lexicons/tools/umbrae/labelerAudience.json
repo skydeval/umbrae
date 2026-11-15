@@ -1,0 +1,30 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.labelerAudience",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A permitted list for restricted labels, managed by the labeler's operator. A label whose audience is this record's key is shown only to these accounts. An audience that doesn't exist hides its labels from everyone. Readable only by the labeler space's readers.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["members", "createdAt"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxGraphemes": 64,
+            "maxLength": 640,
+            "description": "For the operator's own reference."
+          },
+          "members": {
+            "type": "array",
+            "maxLength": 5000,
+            "items": { "type": "string", "format": "did" },
+            "description": "The accounts that may see this audience's labels. Unique."
+          },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    }
+  }
+}
