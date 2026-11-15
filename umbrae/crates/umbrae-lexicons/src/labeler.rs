@@ -206,17 +206,10 @@ pub fn validate_labeler_record(
 /// Whether `uri` names a public label subject: an account (`at://did` or a
 /// bare DID) or a public record.
 pub fn is_public_subject(uri: &str) -> bool {
-    if is_space_uri(uri) {
-        return false;
-    }
-    if is_valid_did(uri) {
-        return true;
-    }
-    match uri.strip_prefix("at://") {
-        Some(did) if is_valid_did(did) => true,
-        Some(_) => PublicUri::parse(uri).is_some(),
-        None => false,
-    }
+    matches!(
+        label_subject(uri),
+        Some(LabelSubject::Account(_) | LabelSubject::Record(_))
+    )
 }
 
 /// What a label's `uri` names, or `None` if it may not be labelled: a

@@ -430,7 +430,7 @@ pub(crate) fn run(
             Err(format!("{current:?}"))
         },
     );
-    let audiences = Audiences::from_records(&audiences);
+    let audiences = Audiences::from_records(&labeler.did, &audiences);
     let restricted = labels
         .iter()
         .map(|(_, l)| l)
@@ -453,6 +453,7 @@ pub(crate) fn run(
         ),
         !can_view_label(None, restricted, None, &audiences, &ctx),
         can_view_label(Some(reader.did.as_str()), open, None, &audiences, &ctx),
+        can_view_label(None, open, None, &audiences, &ctx),
     ];
     report.check(
         "labeler: the restricted account label shows only to its audience; the open one to anyone",
@@ -472,14 +473,13 @@ pub(crate) fn run(
         )?
         .ok("describeRepo")?
         .json();
+    // A response without the list would prove nothing.
     let collections: Vec<String> = public["collections"]
         .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|c| c.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
+        .ok_or_else(|| format!("describeRepo has no collections: {public}"))?
+        .iter()
+        .filter_map(|c| c.as_str().map(str::to_owned))
+        .collect();
     let listed = pds
         .get(
             "com.atproto.repo.listRecords",
@@ -495,9 +495,11 @@ pub(crate) fn run(
     report.check(
         "labeler: the public repo shows no space policy and no labeler collections",
         if none_listed
-            && !collections
-                .iter()
-                .any(|c| c.starts_with("tools.umbrae.") || c.starts_with("com.atproto.space"))
+            && !collections.iter().any(|c| {
+                c.starts_with("tools.umbrae.")
+                    || c.starts_with("com.atproto.space")
+                    || c.starts_with("com.atproto.memberspace")
+            })
         {
             Ok(format!("{} public collection(s)", collections.len()))
         } else {
@@ -519,11 +521,25 @@ pub(crate) fn run(
         ],
         &vec![],
     )?;
+    // The policy record must be there (the reader synced it) for its
+    // refusal to mean anything. The PDS refuses any space read without an
+    // authorization header or credential at its auth layer (reference:
+    // api/com/atproto/space/getRepo.ts, authorizationOrSpaceCredential;
+    // auth-verifier.ts, AuthMissing), whatever the policy says, so this
+    // proves only that there is no unauthenticated read path. That the
+    // space itself isn't open is the probe check below.
+    let policy_synced = records
+        .iter()
+        .any(|r| r.collection == "com.atproto.space.policy" && r.rkey == SELF_RKEY);
     report.check(
-        "labeler: the space's repo and its policy record can't be read without auth",
-        match (expect_refusal(&repo, None), expect_refusal(&rec, None)) {
-            (Ok(a), Ok(b)) => Ok(format!("{a}; {b}")),
-            (a, b) => Err(format!("{a:?} {b:?}")),
+        "labeler: the space's repo and its existing policy record are refused without auth (AuthMissing)",
+        match (
+            policy_synced,
+            expect_refusal(&repo, Some("AuthMissing")),
+            expect_refusal(&rec, Some("AuthMissing")),
+        ) {
+            (true, Ok(a), Ok(b)) => Ok(format!("{a}; {b}")),
+            (synced, a, b) => Err(format!("policy record synced: {synced}; {a:?} {b:?}")),
         },
     );
     let probe = |s: &str| {
@@ -542,9 +558,14 @@ pub(crate) fn run(
     )?;
     report.check(
         "labeler: without a delegation, the labeler space answers exactly as a made-up one",
+        // SpaceNotFound, from the policy check (reference: space-policy
+        // manager.ts authorizeCredential, actor-store space reader.ts
+        // getActiveSpacePolicy). Pinned, so that two requests refused for
+        // the same unrelated reason (a malformed body, say) don't pass.
         if real.status != 200
             && real.status == made_up.status
-            && real.error_name() == made_up.error_name()
+            && real.error_name() == "SpaceNotFound"
+            && made_up.error_name() == "SpaceNotFound"
         {
             Ok(format!("both HTTP {} {}", real.status, real.error_name()))
         } else {

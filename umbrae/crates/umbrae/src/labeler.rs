@@ -126,30 +126,46 @@ pub fn hidden_post_of(label: &Label) -> Option<SpaceRecordUri> {
     }
 }
 
-/// A labeler's audiences, from its `tools.umbrae.labelerAudience` records.
+/// One labeler's audiences, from the `tools.umbrae.labelerAudience` records
+/// in its space. Audience ids are only record keys, so another labeler can
+/// reuse one: an `Audiences` opens only labels whose `src` is its labeler.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Audiences(BTreeMap<String, BTreeSet<String>>);
+pub struct Audiences {
+    labeler: String,
+    members: BTreeMap<String, BTreeSet<String>>,
+}
 
 impl Audiences {
-    pub fn from_records<'a>(records: impl IntoIterator<Item = &'a LabelerAudience>) -> Self {
-        Self(
-            records
+    /// `records` must be the validated audience records from `labeler`'s
+    /// space.
+    pub fn from_records<'a>(
+        labeler: &str,
+        records: impl IntoIterator<Item = &'a LabelerAudience>,
+    ) -> Self {
+        Self {
+            labeler: labeler.to_owned(),
+            members: records
                 .into_iter()
                 .map(|a| (a.id.clone(), a.members.clone()))
                 .collect(),
-        )
+        }
     }
 
-    /// Whether `did` is in audience `id`. An unknown audience has no one.
-    pub fn allows(&self, id: &str, did: &str) -> bool {
-        self.0.get(id).is_some_and(|m| m.contains(did))
+    /// Whether `did` is in labeler `src`'s audience `id`. An unknown
+    /// audience, or another labeler's, has no one.
+    pub fn allows(&self, src: &str, id: &str, did: &str) -> bool {
+        !self.labeler.is_empty()
+            && self.labeler == src
+            && self.members.get(id).is_some_and(|m| m.contains(did))
     }
 }
 
 /// Whether `viewer` may see `label`, given that they may see the labeler
 /// at all (which the serving app decides).
 ///
-/// - With an audience: only its members; an unknown audience, nobody.
+/// - With an audience: only its members, from the label's own labeler's
+///   `audiences`; an unknown audience, nobody. That includes the labeler
+///   itself unless it lists its own DID.
 /// - On an account or a public record: no further condition.
 /// - On a hidden post: also only if they may see that post. `post_space` is
 ///   the state of the post's space; without it, no (fail closed).
@@ -162,7 +178,7 @@ pub fn can_view_label(
     ctx: &impl ViewContext,
 ) -> bool {
     if let Some(a) = &label.audience {
-        if !viewer.is_some_and(|v| audiences.allows(a, v)) {
+        if !viewer.is_some_and(|v| audiences.allows(&label.src, a, v)) {
             return false;
         }
     }
@@ -251,6 +267,10 @@ pub fn verify_label_with(label: &Label, keys: &LabelKeys) -> bool {
 /// label records as `(rkey, label)`. Per `(src, uri, cid, val)` the latest
 /// record wins, by `cts` and then by record key; it applies unless it is a
 /// negation or has expired. Output is ordered by subject, then value.
+///
+/// `audience` isn't part of the key: a later restricted record replaces an
+/// open one for everyone (those outside its audience then see no label),
+/// and a later open record or negation replaces a restricted one.
 pub fn current_labels<'a>(
     records: impl IntoIterator<Item = (&'a str, &'a Label)>,
     now_ms: i64,
@@ -663,7 +683,7 @@ mod tests {
         const MOD: &str = "did:plc:moddddddddddddddddddddddd";
         const AUD: &str = "3mbaaaaaaaab2";
         let c = Everyone;
-        let audiences = Audiences::from_records([&audience(AUD, &[MOD])]);
+        let audiences = Audiences::from_records(LABELER, [&audience(AUD, &[MOD])]);
         let mut on_account = label(
             "did:plc:carolcccccccccccccccccccc",
             "spam",
@@ -685,6 +705,23 @@ mod tests {
         let mut elsewhere = on_account.clone();
         elsewhere.audience = Some("3mbaaaaaaaab3".into());
         assert!(!can_view_label(Some(MOD), &elsewhere, None, &audiences, &c));
+        // Another labeler's audience with the same key opens nothing here,
+        // and this labeler's audience opens nothing of another labeler's.
+        let theirs = Audiences::from_records(
+            "did:plc:otherlabeleroooooooooooo",
+            [&audience(AUD, &[MOD, BOB])],
+        );
+        assert!(!can_view_label(Some(MOD), &on_account, None, &theirs, &c));
+        assert!(!can_view_label(Some(BOB), &on_account, None, &theirs, &c));
+        let mut from_other = on_account.clone();
+        from_other.src = "did:plc:otherlabeleroooooooooooo".into();
+        assert!(!can_view_label(
+            Some(MOD),
+            &from_other,
+            None,
+            &audiences,
+            &c
+        ));
 
         // On a hidden post: in the audience AND able to see the post.
         let space = crate::space::group_space(ALICE, "3mbbbbbbbbbb2").unwrap();
@@ -701,7 +738,7 @@ mod tests {
             .unwrap();
         let mut on_post = label(&post.to_string(), "spam", "2026-11-14T08:00:00.000Z");
         on_post.audience = Some(AUD.into());
-        let both = Audiences::from_records([&audience(AUD, &[MOD, BOB])]);
+        let both = Audiences::from_records(LABELER, [&audience(AUD, &[MOD, BOB])]);
         assert!(can_view_label(Some(BOB), &on_post, Some(&state), &both, &c));
         // In the audience but not the group.
         assert!(!can_view_label(
@@ -719,6 +756,39 @@ mod tests {
             &audiences,
             &c
         ));
+    }
+
+    #[test]
+    fn audience_is_not_part_of_precedence() {
+        const MOD: &str = "did:plc:moddddddddddddddddddddddd";
+        const BOB: &str = "did:plc:bobbbbbbbbbbbbbbbbbbbbbb";
+        const AUD: &str = "3mbaaaaaaaab2";
+        let c = Everyone;
+        let audiences = Audiences::from_records(LABELER, [&audience(AUD, &[MOD])]);
+        let open = label(POST_A, "spam", "2026-11-14T08:00:00.000Z");
+        let mut restricted = label(POST_A, "spam", "2026-11-14T09:00:00.000Z");
+        restricted.audience = Some(AUD.into());
+        // A later restricted record replaces the open one: only MOD sees it.
+        let now = current_labels(
+            [("3mbaaaaaaaaa2", &open), ("3mbaaaaaaaaa3", &restricted)],
+            NOW_MS,
+        );
+        assert_eq!(now, [&restricted]);
+        assert!(can_view_label(Some(MOD), now[0], None, &audiences, &c));
+        assert!(!can_view_label(Some(BOB), now[0], None, &audiences, &c));
+        // A later open record replaces the restricted one, for everyone.
+        let mut reopened = open.clone();
+        reopened.cts = "2026-11-14T09:30:00.000Z".into();
+        let now = current_labels(
+            [
+                ("3mbaaaaaaaaa2", &open),
+                ("3mbaaaaaaaaa3", &restricted),
+                ("3mbaaaaaaaaa4", &reopened),
+            ],
+            NOW_MS,
+        );
+        assert_eq!(now, [&reopened]);
+        assert!(can_view_label(Some(BOB), now[0], None, &audiences, &c));
     }
 
     #[test]
