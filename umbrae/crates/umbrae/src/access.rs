@@ -18,7 +18,7 @@
 //! A reader can't tell unreadable from missing: callers omit denied records
 //! from lists and answer not-found for a single fetch.
 
-use crate::space::check_policy;
+use crate::space::{check_policy, is_only_me};
 use std::collections::BTreeMap;
 use umbrae_core::drisl::Value;
 use umbrae_core::policy::{
@@ -187,7 +187,8 @@ pub fn can_write(viewer: &str, state: &SpaceState, ctx: &impl ViewContext) -> bo
 
 /// Whether `viewer` may see a bookmark: they may see the bookmark itself
 /// (in its owner's only-me space, so only the owner) **and** the post it
-/// points at, in that post's space. Without the post's state, no.
+/// points at, in that post's space. Without the post's state, no. A
+/// bookmark anywhere but its author's own only-me space never shows.
 pub fn can_view_bookmark(
     viewer: Option<&str>,
     bookmark: &SpaceRecordUri,
@@ -196,7 +197,9 @@ pub fn can_view_bookmark(
     subject_space: Option<&SpaceState>,
     ctx: &impl ViewContext,
 ) -> bool {
-    can_view_record(viewer, bookmark, only_me, ctx)
+    is_only_me(bookmark.space())
+        && bookmark.author() == bookmark.space().authority()
+        && can_view_record(viewer, bookmark, only_me, ctx)
         && subject_space.is_some_and(|s| can_view_record(viewer, subject, s, ctx))
 }
 
@@ -322,6 +325,38 @@ mod tests {
             &me,
             &p,
             Some(&left),
+            &c
+        ));
+        // A "bookmark" written into the group itself shows to nobody, even
+        // when the caller didn't drop it at validation.
+        let stray = g
+            .space
+            .record(BOB, umbrae_lexicons::BOOKMARK, "3mbaaaaaaaaa3")
+            .unwrap();
+        for viewer in [ALICE, BOB, DAVE] {
+            assert!(!can_view_bookmark(
+                Some(viewer),
+                &stray,
+                &g,
+                &p,
+                Some(&g),
+                &c
+            ));
+        }
+        // Nor one by someone else in Alice's key-self space, even if that
+        // space was misconfigured as a memberspace with them writing.
+        let mut odd = SpaceState::new(only_me_space(ALICE).unwrap(), Some(group_policy(None)));
+        odd.members.insert(BOB, rw(true, true));
+        let foreign = odd
+            .space
+            .record(BOB, umbrae_lexicons::BOOKMARK, "3mbaaaaaaaaa4")
+            .unwrap();
+        assert!(!can_view_bookmark(
+            Some(ALICE),
+            &foreign,
+            &odd,
+            &p,
+            Some(&g),
             &c
         ));
     }
