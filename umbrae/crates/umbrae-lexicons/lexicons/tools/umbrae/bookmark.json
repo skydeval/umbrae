@@ -1,0 +1,19 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.bookmark",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A bookmark of a hidden post, kept in the author's only-me space (key self) so only they and the apps they admit can see it. The subject is a tools.umbrae.post in any tools.umbrae.space space. Shown only while its owner may still see the post.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["subject", "createdAt"],
+        "properties": {
+          "subject": { "type": "ref", "ref": "com.atproto.repo.strongRef" },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    }
+  }
+}

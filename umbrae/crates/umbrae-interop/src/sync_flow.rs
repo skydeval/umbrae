@@ -2,7 +2,8 @@
 //! it: authorize with a notification registration (confirmed over TLS),
 //! sync a group in full, persist the cursor and credential, get a real
 //! `notifySpaceUpdate` when a member posts, sync incrementally from the
-//! restored cursor, and see a removed member leave the writer set.
+//! restored cursor, and see a removed member leave the writer set. Then an
+//! only-me space with a bookmark, readable by its owner alone.
 
 use crate::umbrae_flow::delegation;
 use crate::{Account, Pds, Report};
@@ -14,11 +15,11 @@ use std::pin::pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
-use umbrae::space::{group_policy, group_space};
+use umbrae::space::{group_policy, group_space, only_me_space, ONLY_ME_SKEY};
 use umbrae::SPACE_TYPE;
 use umbrae_core::drisl::Value as D;
 use umbrae_core::Cid;
-use umbrae_lexicons::{Record, GROUP, GROUP_RKEY, POST};
+use umbrae_lexicons::{Record, BOOKMARK, GROUP, GROUP_RKEY, POST};
 use umbrae_sync::notify::{self, Notification, Update};
 use umbrae_sync::{
     authorize, sync_space, Authorize, Checked, Credential, Identity, Method, Notify, RepoChange,
@@ -287,12 +288,16 @@ pub(crate) fn run(
         &alice.auth(),
     )?
     .ok("putMembers sync")?;
-    write(
+    let first_cid = write(
         alice,
         POST,
         "3mbaaaaaaad22",
         json!({ "$type": POST, "text": "first", "createdAt": CREATED }),
-    )?;
+    )?
+    .json()["cid"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
     write(
         bob,
         POST,
@@ -521,6 +526,96 @@ pub(crate) fn run(
             other => Err(format!(
                 "{:?}, {refused} refused, recorded {kept}",
                 other.map(|r| r.status())
+            )),
+        },
+    );
+
+    // Only-me, with a bookmark of the group's first post.
+    let me = only_me_space(&alice.did).map_err(|e| e.to_string())?;
+    let me_str = me.to_string();
+    pds.post(
+        "com.atproto.space.createSpace",
+        &json!({ "spaceType": SPACE_TYPE, "skey": ONLY_ME_SKEY,
+            "policy": { "$type": "com.atproto.personalspace.policy" } }),
+        &alice.auth(),
+    )?
+    .ok("createSpace only-me")?;
+    let subject = space
+        .record(&alice.did, POST, "3mbaaaaaaad22")
+        .map_err(|e| e.to_string())?;
+    pds.post(
+        "com.atproto.space.createRecord",
+        &json!({ "space": me_str, "repo": alice.did, "collection": BOOKMARK, "rkey": "3mbaaaaaaad3a",
+            "record": { "$type": BOOKMARK, "subject": { "uri": subject.to_string(), "cid": first_cid },
+                "createdAt": CREATED } }),
+        &alice.auth(),
+    )?
+    .ok("bookmark")?;
+    let d = delegation(pds, &me_str, alice)?;
+    let cred = block_on(authorize(
+        &transport,
+        &directory,
+        &me,
+        Authorize {
+            delegation: &d,
+            attestation: None,
+            notify: None,
+        },
+        now(),
+    ))
+    .map_err(|e| e.to_string())?;
+    let mut me_store = Store::new();
+    let (_, changes) = block_on(sync_space(
+        &transport,
+        &directory,
+        &cred,
+        &SpaceCursor::default(),
+        &lookup(&me_store),
+        now(),
+    ))
+    .map_err(|e| e.to_string())?;
+    apply(&mut me_store, &changes);
+    let marks: Vec<_> = changes
+        .iter()
+        .flat_map(|c| match c {
+            RepoChange::Replaced { records, .. } => records.iter().collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .filter(|r| matches!(&r.checked, Checked::Hidden(Record::Bookmark(b)) if b.subject.target.hidden() == Some(&subject)))
+        .collect();
+    let bob_try = {
+        let d = delegation(pds, &me_str, bob)?;
+        block_on(authorize(
+            &transport,
+            &directory,
+            &me,
+            Authorize {
+                delegation: &d,
+                attestation: None,
+                notify: None,
+            },
+            now(),
+        ))
+    };
+    report.check(
+        "sync: a bookmark in Alice's only-me space syncs and validates; Bob can't read the space",
+        match (marks.len(), &bob_try) {
+            (1, Err(e)) if e.is_space_not_found() => Ok("1 bookmark; bob SpaceNotFound".into()),
+            (n, other) => Err(format!(
+                "{n} bookmark(s), bob {other:?}; changes {:?}",
+                changes
+                    .iter()
+                    .map(|c| match c {
+                        RepoChange::Replaced { records, .. } => format!(
+                            "replaced {:?}",
+                            records
+                                .iter()
+                                .map(|r| format!("{:?}", r.checked))
+                                .collect::<Vec<_>>()
+                        ),
+                        other => format!("{other:?}"),
+                    })
+                    .collect::<Vec<_>>()
             )),
         },
     );

@@ -7,9 +7,12 @@
 //!   hidden one);
 //! - a like's subject is a hidden post in the like's own space;
 //! - an embed never points at a hidden record (no hidden quotes);
-//! - a group record is the authority's own, at rkey `self`.
+//! - a group record is the authority's own, at rkey `self`;
+//! - a bookmark is the authority's own, in the only-me space (key `self`),
+//!   and its subject is a hidden post (in any Umbrae space). Show it only
+//!   while its owner may still see that post.
 
-use crate::{GROUP, GROUP_RKEY, LIKE, POST, SPACE_TYPE};
+use crate::{BOOKMARK, GROUP, GROUP_RKEY, LIKE, POST, SPACE_TYPE};
 use std::collections::BTreeMap;
 use std::fmt;
 use umbrae_core::cid::Cid;
@@ -133,11 +136,19 @@ pub struct Group {
     pub created_at: String,
 }
 
+/// A bookmark of a hidden post, kept in the author's only-me space.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bookmark {
+    pub subject: StrongRef,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Record {
     Post(Box<Post>),
     Like(Like),
     Group(Group),
+    Bookmark(Bookmark),
 }
 
 const EMBEDS: &[&str] = &[
@@ -159,7 +170,7 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
         return Err(Invalid("not a tools.umbrae.space space"));
     }
     let collection = uri.collection();
-    if ![POST, LIKE, GROUP].contains(&collection) {
+    if ![POST, LIKE, GROUP, BOOKMARK].contains(&collection) {
         return Ok(None);
     }
     match value.get("$type") {
@@ -174,6 +185,15 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
         LIKE => {
             tid_key(uri)?;
             Record::Like(like(value, space)?)
+        }
+        BOOKMARK => {
+            tid_key(uri)?;
+            if space.skey() != GROUP_RKEY || uri.author() != space.authority() {
+                return Err(Invalid(
+                    "a bookmark lives only in its author's only-me space",
+                ));
+            }
+            Record::Bookmark(bookmark(value)?)
         }
         _ => {
             if uri.author() != space.authority() || uri.rkey() != GROUP_RKEY {
@@ -264,6 +284,18 @@ fn like(m: &Map, space: &SpaceRef) -> Result<Like, Invalid> {
         _ => return Err(Invalid("a like's subject must be a post in the same space")),
     }
     Ok(Like {
+        subject,
+        created_at: datetime(m, "createdAt")?,
+    })
+}
+
+fn bookmark(m: &Map) -> Result<Bookmark, Invalid> {
+    let subject = strong_ref(m.get("subject"))?;
+    match &subject.target {
+        Target::Hidden(u) if u.space().space_type() == SPACE_TYPE && u.collection() == POST => {}
+        _ => return Err(Invalid("a bookmark's subject must be a hidden post")),
+    }
+    Ok(Bookmark {
         subject,
         created_at: datetime(m, "createdAt")?,
     })
@@ -590,6 +622,54 @@ mod tests {
         assert!(check(LIKE, BOB, RKEY, &like(&hidden_post_uri(OTHER_SKEY))).is_err());
         let public = "at://did:plc:carolcccccccccccccccccccc/app.bsky.feed.post/3mbaaaaaaaaa5";
         assert!(check(LIKE, BOB, RKEY, &like(public)).is_err());
+    }
+
+    #[test]
+    fn bookmarks_live_in_their_authors_only_me_space() {
+        let bookmark = |u: &str| {
+            map(&[
+                ("$type", t(BOOKMARK)),
+                ("subject", sref(u)),
+                ("createdAt", t(NOW)),
+            ])
+        };
+        let only_me = |author: &str| SpaceRef::new(author, SPACE_TYPE, "self").unwrap();
+        let at = |space: &SpaceRef, author: &str, rkey: &str| {
+            space.record(author, BOOKMARK, rkey).unwrap()
+        };
+        // Alice bookmarks a post from a group she reads, and one of her own
+        // only-me posts.
+        let group_post = hidden_post_uri(SKEY);
+        let own = only_me(ALICE)
+            .record(ALICE, POST, RKEY)
+            .unwrap()
+            .to_string();
+        for subject in [&group_post, &own] {
+            match validate_record(&at(&only_me(ALICE), ALICE, RKEY), &bookmark(subject)) {
+                Ok(Some(Record::Bookmark(b))) => assert!(b.subject.target.hidden().is_some()),
+                other => panic!("{other:?}"),
+            }
+        }
+        // Not in a group space; not in someone else's only-me; not a TID key.
+        assert!(check(BOOKMARK, ALICE, RKEY, &bookmark(&group_post)).is_err());
+        assert!(validate_record(&at(&only_me(ALICE), BOB, RKEY), &bookmark(&group_post)).is_err());
+        assert!(
+            validate_record(&at(&only_me(ALICE), ALICE, "self"), &bookmark(&group_post)).is_err()
+        );
+        // Only hidden posts: no public posts, likes, or other space types.
+        let public = "at://did:plc:carolcccccccccccccccccccc/app.bsky.feed.post/3mbaaaaaaaaa5";
+        let like = space(SKEY).record(BOB, LIKE, RKEY).unwrap().to_string();
+        let elsewhere = SpaceRef::new(BOB, "com.example.space", "x")
+            .unwrap()
+            .record(BOB, POST, RKEY)
+            .unwrap()
+            .to_string();
+        for bad in [public, like.as_str(), elsewhere.as_str()] {
+            assert!(
+                validate_record(&at(&only_me(ALICE), ALICE, RKEY), &bookmark(bad)).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

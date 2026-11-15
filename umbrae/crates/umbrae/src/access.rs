@@ -185,6 +185,21 @@ pub fn can_write(viewer: &str, state: &SpaceState, ctx: &impl ViewContext) -> bo
     can_view_space(Some(viewer), state, ctx) && is_writer(viewer, state)
 }
 
+/// Whether `viewer` may see a bookmark: they may see the bookmark itself
+/// (in its owner's only-me space, so only the owner) **and** the post it
+/// points at, in that post's space. Without the post's state, no.
+pub fn can_view_bookmark(
+    viewer: Option<&str>,
+    bookmark: &SpaceRecordUri,
+    only_me: &SpaceState,
+    subject: &SpaceRecordUri,
+    subject_space: Option<&SpaceState>,
+    ctx: &impl ViewContext,
+) -> bool {
+    can_view_record(viewer, bookmark, only_me, ctx)
+        && subject_space.is_some_and(|s| can_view_record(viewer, subject, s, ctx))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +287,43 @@ mod tests {
         let c = Ctx::default();
         assert!(can_view_space(Some(ALICE), &s, &c));
         assert!(!can_view_space(Some(BOB), &s, &c));
+    }
+
+    #[test]
+    fn bookmarks_follow_their_owner_and_the_post() {
+        let c = Ctx::default();
+        let me = SpaceState::new(only_me_space(BOB).unwrap(), Some(only_me_policy()));
+        let mark = me
+            .space
+            .record(BOB, umbrae_lexicons::BOOKMARK, "3mbaaaaaaaaa2")
+            .unwrap();
+        let g = group();
+        let p = post(ALICE);
+        // Bob bookmarked a post in a group he's in.
+        assert!(can_view_bookmark(Some(BOB), &mark, &me, &p, Some(&g), &c));
+        // Nobody else sees Bob's bookmarks, even a group member.
+        assert!(!can_view_bookmark(
+            Some(ALICE),
+            &mark,
+            &me,
+            &p,
+            Some(&g),
+            &c
+        ));
+        assert!(!can_view_bookmark(None, &mark, &me, &p, Some(&g), &c));
+        // Without the post's space state: hidden.
+        assert!(!can_view_bookmark(Some(BOB), &mark, &me, &p, None, &c));
+        // Once Bob leaves the group, his bookmark of its post hides too.
+        let mut left = group();
+        left.members = Members::default();
+        assert!(!can_view_bookmark(
+            Some(BOB),
+            &mark,
+            &me,
+            &p,
+            Some(&left),
+            &c
+        ));
     }
 
     #[test]
