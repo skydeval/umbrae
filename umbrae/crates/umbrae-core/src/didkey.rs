@@ -110,6 +110,35 @@ impl AnyKey {
             }
         }
     }
+
+    /// Verify a compact 64-byte ECDSA signature over SHA-256 of `msg`,
+    /// accepting high-S as well as low-S, as standard JOSE does.
+    pub fn verify_any_s(&self, msg: &[u8], sig: &[u8]) -> bool {
+        if sig.len() != 64 {
+            return false;
+        }
+        // (r, s) and (r, n - s) are both valid; check the low-S form.
+        match self {
+            AnyKey::P256(pk) => {
+                use p256::ecdsa::signature::Verifier;
+                p256::ecdsa::Signature::from_slice(sig).is_ok_and(|sig| {
+                    let sig = sig.normalize_s().unwrap_or(sig);
+                    p256::ecdsa::VerifyingKey::from(pk)
+                        .verify(msg, &sig)
+                        .is_ok()
+                })
+            }
+            AnyKey::K256(pk) => {
+                use k256::ecdsa::signature::Verifier;
+                k256::ecdsa::Signature::from_slice(sig).is_ok_and(|sig| {
+                    let sig = sig.normalize_s().unwrap_or(sig);
+                    k256::ecdsa::VerifyingKey::from(pk)
+                        .verify(msg, &sig)
+                        .is_ok()
+                })
+            }
+        }
+    }
 }
 
 /// Parse a P-256 or secp256k1 `did:key`.

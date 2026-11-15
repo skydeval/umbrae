@@ -177,7 +177,8 @@ fn parse_datetime_ns(s: &str) -> Option<i128> {
         "Z" => 0,
         off if off.len() == 6 => {
             let sign = if off.starts_with('-') { -1 } else { 1 };
-            sign * (off[1..3].parse::<i64>().ok()? * 3600 + off[4..6].parse::<i64>().ok()? * 60)
+            let part = |r: std::ops::Range<usize>| off.get(r)?.parse::<i64>().ok();
+            sign * (part(1..3)? * 3600 + part(4..6)? * 60)
         }
         _ => return None,
     };
@@ -239,6 +240,8 @@ mod tests {
             Some(500_000_000)
         );
         assert_eq!(parse_datetime_ns("2026-11-14"), None);
+        // A label built without validation: no panic on a split character.
+        assert_eq!(parse_datetime_ns("2026-11-14T10:00:00+0é00"), None);
     }
 
     #[test]

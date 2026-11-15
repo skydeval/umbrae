@@ -295,7 +295,14 @@ pub(crate) fn run(
     let synced = sync(pds, dir, &space, &reader, Some(&attestation))?;
     report.check(
         "labeler: the reader syncs through the allowed app's attestation; only the labeler is a writer",
-        if synced.writers == [labeler.did.clone()] {
+        // Both PDS writes must have been accepted for the writer set to
+        // prove they aren't tracked.
+        if reader_write.status != 200 || outsider_write.status != 200 {
+            Err(format!(
+                "a write was refused (reader HTTP {}, outsider HTTP {}), so the writer set proves nothing",
+                reader_write.status, outsider_write.status
+            ))
+        } else if synced.writers == [labeler.did.clone()] {
             Ok(format!(
                 "reader write HTTP {}, outsider write HTTP {}",
                 reader_write.status, outsider_write.status

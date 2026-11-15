@@ -9,7 +9,7 @@
 //!   public meaning, and naming one in public leaks that it exists.
 
 use umbrae_core::drisl::Value;
-use umbrae_core::uri::{is_space_uri, SpaceRecordUri, SpaceRef};
+use umbrae_core::uri::{contains_space_uri, SpaceRecordUri, SpaceRef};
 use umbrae_lexicons::Target;
 
 /// The space a reply must go into, or `None` when the parent is public and
@@ -23,10 +23,11 @@ pub fn like_space(subject: &SpaceRecordUri) -> SpaceRef {
 }
 
 /// Whether a record headed for a **public** repo names a hidden record
-/// anywhere in its value. A client refuses to write one that does.
+/// anywhere in its value, including inside its text or another URL. A
+/// client refuses to write one that does.
 pub fn leaks_hidden(value: &Value) -> bool {
     match value {
-        Value::Text(t) => is_space_uri(t),
+        Value::Text(t) => contains_space_uri(t),
         Value::Array(a) => a.iter().any(leaks_hidden),
         Value::Map(m) => m.values().any(leaks_hidden),
         _ => false,
@@ -78,5 +79,15 @@ mod tests {
         assert!(leaks_hidden(&Value::Array(vec![Value::Text(
             hidden().space().to_string()
         )])));
+        // Pasted into the text, or wrapped in another URL.
+        let text = |t: String| Value::Map(BTreeMap::from([("text".to_string(), Value::Text(t))]));
+        assert!(leaks_hidden(&text(format!("look: {}", hidden()))));
+        assert!(leaks_hidden(&text(format!(
+            "https://app.example/view?uri={}",
+            hidden()
+        ))));
+        assert!(!leaks_hidden(&text(format!(
+            "look: at://{BOB}/app.bsky.feed.post/3mbaaaaaaaaa5"
+        ))));
     }
 }

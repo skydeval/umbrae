@@ -28,6 +28,9 @@ pub const MAX_RECORD_SIZE: usize = 1024 * 1024;
 
 const TAG_CID: u64 = 42;
 
+/// The most array slots a decoder reserves before reading the items.
+const PREALLOC_ITEMS: usize = 1024;
+
 /// A DRISL value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -331,7 +334,7 @@ impl Decoder<'_> {
     }
 
     /// A length that must fit in what's left of the input (each element
-    /// takes at least one byte), so a hostile length can't force a huge
+    /// takes at least one byte), so a hostile length can't on its own force a huge
     /// allocation.
     fn length(&self, n: u64) -> Result<usize, DrislError> {
         let n = usize::try_from(n).map_err(|_| DrislError::Truncated)?;
@@ -368,7 +371,9 @@ impl Decoder<'_> {
                     return Err(DrislError::Depth);
                 }
                 let len = self.length(n)?;
-                let mut items = Vec::with_capacity(len);
+                // Nested arrays could each claim most of the input, and their
+                // reservations would add up, so preallocate a little at most.
+                let mut items = Vec::with_capacity(len.min(PREALLOC_ITEMS));
                 for _ in 0..len {
                     items.push(self.value(depth + 1)?);
                 }

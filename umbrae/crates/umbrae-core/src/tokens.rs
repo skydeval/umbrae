@@ -204,8 +204,17 @@ pub fn parse(kind: TokenKind, jwt: &str) -> Result<Parsed, TokenError> {
             if !is_valid_did(&iss) {
                 return Err(TokenError::BadJwtIss);
             }
-            if SpaceRef::parse(&sub).is_err() {
-                return Err(TokenError::BadJwtSub);
+            let space = SpaceRef::parse(&sub).map_err(|_| TokenError::BadJwtSub)?;
+            // Bind the token to the space it names, as the reference host
+            // does: a credential is issued by that space's authority, and a
+            // delegation is addressed to that authority's space host.
+            if kind == TokenKind::Credential && iss != space.authority() {
+                return Err(TokenError::BadJwtIss);
+            }
+            if kind == TokenKind::Delegation
+                && aud.as_deref() != Some(space_host_aud(space.authority()).as_str())
+            {
+                return Err(TokenError::BadJwtAudience);
             }
         }
         TokenKind::ClientAttestation => {
@@ -220,7 +229,10 @@ pub fn parse(kind: TokenKind, jwt: &str) -> Result<Parsed, TokenError> {
             return Err(TokenError::BadJwtCnf);
         }
         match iat {
-            Some(iat) if exp > iat && exp - iat <= CREDENTIAL_MAX_AGE_SEC => {}
+            Some(iat)
+                if exp
+                    .checked_sub(iat)
+                    .is_some_and(|life| life > 0 && life <= CREDENTIAL_MAX_AGE_SEC) => {}
             _ => return Err(TokenError::BadJwt("invalid space credential lifetime")),
         }
     }
@@ -282,12 +294,20 @@ pub fn check_claims(parsed: &Parsed, now: i64, expect: &Expect<'_>) -> Result<()
 }
 
 /// Verify the signature with `key`. The header's `alg` must match the key
-/// type, and the signature must be low-S, as atproto JWTs require.
+/// type. Delegation tokens and credentials must be low-S, as atproto JWTs
+/// require. A client attestation is an OAuth client's JWT, which the
+/// reference checks as standard JOSE, so either S is accepted there.
 pub fn verify_signature(parsed: &Parsed, key: &AnyKey) -> Result<(), TokenError> {
     if parsed.header.alg != key.jwt_alg() || parsed.signature.len() != 64 {
         return Err(TokenError::BadJwtSignature);
     }
-    if key.verify_low_s(parsed.signing_input.as_bytes(), &parsed.signature) {
+    let msg = parsed.signing_input.as_bytes();
+    let ok = if parsed.kind == TokenKind::ClientAttestation {
+        key.verify_any_s(msg, &parsed.signature)
+    } else {
+        key.verify_low_s(msg, &parsed.signature)
+    };
+    if ok {
         Ok(())
     } else {
         Err(TokenError::BadJwtSignature)
@@ -834,6 +854,94 @@ mod tests {
         flipped.signature = high.to_bytes().to_vec();
         assert_eq!(
             verify_signature(&flipped, &key),
+            Err(TokenError::BadJwtSignature)
+        );
+    }
+
+    #[test]
+    fn tokens_are_bound_to_the_space_they_name() {
+        // Someone else's key, claiming a credential for this space.
+        let mallory = k256_signer();
+        let forged = forge(
+            json!({"alg": "ES256K", "typ": CREDENTIAL_TYP, "kid": "#atproto"}),
+            json!({"iss": "did:example:mallory", "sub": SPACE, "cnf": {"kid": bound_key()}, "iat": NOW, "exp": NOW + 600, "jti": "j"}),
+            &mallory,
+        );
+        assert_eq!(
+            verify(
+                TokenKind::Credential,
+                &forged,
+                NOW,
+                &Expect {
+                    sub: Some(SPACE),
+                    ..Default::default()
+                },
+                resolver(mallory.did_key())
+            ),
+            Err(TokenError::BadJwtIss)
+        );
+        // A delegation addressed to another authority's space host.
+        let user = k256_signer();
+        let elsewhere = forge(
+            json!({"alg": "ES256K", "typ": DELEGATION_TYP, "kid": "#atproto"}),
+            json!({"iss": "did:example:user", "sub": SPACE, "aud": "did:example:other#atproto_pds", "exp": NOW + 60, "jti": "j"}),
+            &user,
+        );
+        assert_eq!(
+            verify(
+                TokenKind::Delegation,
+                &elsewhere,
+                NOW,
+                &Expect::default(),
+                resolver(user.did_key())
+            ),
+            Err(TokenError::BadJwtAudience)
+        );
+    }
+
+    #[test]
+    fn huge_lifetimes_do_not_overflow() {
+        let s = k256_signer();
+        for (iat, exp) in [(json!(-1), json!(1e300)), (json!(-1e300), json!(NOW))] {
+            let jwt = forge(
+                json!({"alg": "ES256K", "typ": CREDENTIAL_TYP, "kid": "#atproto"}),
+                json!({"iss": "did:example:space", "sub": SPACE, "cnf": {"kid": bound_key()}, "iat": iat, "exp": exp, "jti": "j"}),
+                &s,
+            );
+            assert!(matches!(
+                parse(TokenKind::Credential, &jwt),
+                Err(TokenError::BadJwt(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn client_attestations_accept_high_s() {
+        let signer = p256_signer();
+        let key = didkey::parse_any(&signer.did_key()).unwrap();
+        let jwt = create_client_attestation(
+            "https://app.example.com/client-metadata.json",
+            "did:example:space",
+            None,
+            &signer,
+            NOW,
+        );
+        let parsed = parse(TokenKind::ClientAttestation, &jwt).unwrap();
+        let sig = p256::ecdsa::Signature::from_slice(&parsed.signature).unwrap();
+        let (r, s) = sig.split_scalars();
+        let mut high = parsed.clone();
+        high.signature = p256::ecdsa::Signature::from_scalars(r, -*s)
+            .unwrap()
+            .to_bytes()
+            .to_vec();
+        // As a JOSE library would accept it.
+        verify_signature(&parsed, &key).unwrap();
+        verify_signature(&high, &key).unwrap();
+        // Still bound to the signing input.
+        let mut other = high.clone();
+        other.signing_input.push('x');
+        assert_eq!(
+            verify_signature(&other, &key),
             Err(TokenError::BadJwtSignature)
         );
     }

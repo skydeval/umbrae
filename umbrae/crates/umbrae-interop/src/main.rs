@@ -676,7 +676,7 @@ fn run(pds: &Pds, dir: &plc::Directory, report: &mut Report) -> Result<(), Strin
     )?;
     report.check(
         "a credential signed by another key is refused",
-        expect_refusal(&r, None),
+        expect_refusal(&r, Some("BadSpaceSignature")),
     );
     let r = pds.get(
         "com.atproto.space.getLatestCommit",
@@ -689,7 +689,7 @@ fn run(pds: &Pds, dir: &plc::Directory, report: &mut Report) -> Result<(), Strin
     )?;
     report.check(
         "a credential addressed to another audience is refused",
-        expect_refusal(&r, None),
+        expect_refusal(&r, Some("BadSpaceAudience")),
     );
     let other = fresh_share()?;
     let enc = fresh_share()?;

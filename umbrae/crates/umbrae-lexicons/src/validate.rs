@@ -15,8 +15,8 @@ use std::fmt;
 use umbrae_core::cid::Cid;
 use umbrae_core::drisl::Value;
 use umbrae_core::uri::{
-    is_space_uri, is_valid_did, is_valid_nsid, is_valid_record_key, is_valid_tid, SpaceRecordUri,
-    SpaceRef,
+    contains_space_uri, is_space_uri, is_valid_did, is_valid_nsid, is_valid_record_key,
+    is_valid_tid, SpaceRecordUri, SpaceRef,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -295,7 +295,7 @@ fn strong_ref(v: Option<&Value>) -> Result<StrongRef, Invalid> {
 
 fn mentions_space_uri(v: &Value) -> bool {
     match v {
-        Value::Text(t) => is_space_uri(t),
+        Value::Text(t) => contains_space_uri(t),
         Value::Array(a) => a.iter().any(mentions_space_uri),
         Value::Map(m) => m.values().any(mentions_space_uri),
         _ => false,
@@ -551,6 +551,28 @@ mod tests {
         let public = "at://did:plc:carolcccccccccccccccccccc/app.bsky.feed.post/3mbaaaaaaaaa5";
         assert!(check(POST, BOB, RKEY, &quote(public)).is_ok());
         assert!(check(POST, BOB, RKEY, &quote(&hidden_post_uri(SKEY))).is_err());
+        // A link card whose URL carries another group's hidden post.
+        let card = post_with(&[(
+            "embed",
+            Value::Map(map(&[
+                ("$type", t("app.bsky.embed.external")),
+                (
+                    "external",
+                    Value::Map(map(&[
+                        (
+                            "uri",
+                            t(&format!(
+                                "https://app.example/view?uri={}",
+                                hidden_post_uri(OTHER_SKEY)
+                            )),
+                        ),
+                        ("title", t("")),
+                        ("description", t("")),
+                    ])),
+                ),
+            ])),
+        )]);
+        assert!(check(POST, BOB, RKEY, &card).is_err());
         let odd = post_with(&[("embed", Value::Map(map(&[("$type", t("app.example.x"))])))]);
         assert!(check(POST, BOB, RKEY, &odd).is_err());
     }

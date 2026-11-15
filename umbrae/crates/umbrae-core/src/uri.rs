@@ -217,6 +217,36 @@ pub fn is_space_uri(input: &str) -> bool {
     path == MARKER || path.starts_with("space/")
 }
 
+/// True if a space URI appears anywhere in `text`: as the whole string, or
+/// inside prose or another URL. Errs towards yes: anything that could be a
+/// space URI, cut off by punctuation, a quote or whitespace, counts.
+pub fn contains_space_uri(text: &str) -> bool {
+    text.match_indices(PREFIX).any(|(i, _)| {
+        let rest = &text[i + PREFIX.len()..];
+        let Some(slash) = rest.find('/') else {
+            return false;
+        };
+        // The authority is one unbroken word; a later `/space` in the
+        // prose isn't part of this URI.
+        if rest[..slash].contains(char::is_whitespace) {
+            return false;
+        }
+        let Some(after) = rest[slash + 1..].strip_prefix(MARKER) else {
+            return false;
+        };
+        // `space` as a whole segment, not the start of a longer NSID such
+        // as `spaces.example.x` or `space.example.x`.
+        let b = after.as_bytes();
+        let nsid_char = |c: u8| c.is_ascii_alphanumeric() || c == b'-' || c == b'_';
+        match b.first() {
+            None => true,
+            Some(&c) if nsid_char(c) => false,
+            Some(b'.') => !b.get(1).is_some_and(|&c| nsid_char(c)),
+            Some(_) => true,
+        }
+    })
+}
+
 enum Parsed {
     Space(SpaceRef),
     Record(SpaceRecordUri),
@@ -389,6 +419,35 @@ mod tests {
         assert_eq!(SpaceRef::parse(public), Err(UriError::NotSpaceUri));
         assert!(is_space_uri(SPACE));
         assert!(is_space_uri("at://did:plc:abc/space"));
+    }
+
+    #[test]
+    fn space_uris_inside_text() {
+        for text in [
+            SPACE.to_owned(),
+            RECORD.to_owned(),
+            format!("see {RECORD} for details"),
+            format!("({RECORD})."),
+            format!("https://app.example/view?uri={RECORD}"),
+            "at://did:plc:abc/space".to_owned(),
+            "at://did:plc:abc/space.".to_owned(),
+            "at://did:plc:abc/space, then".to_owned(),
+            format!("at://did:plc:abc/app.bsky.feed.post/3jui7kd54zh2y and {SPACE}"),
+        ] {
+            assert!(contains_space_uri(&text), "{text}");
+        }
+        for text in [
+            "",
+            "plain words about space",
+            "at://did:plc:abc/app.bsky.feed.post/3jui7kd54zh2y",
+            "at://did:plc:abc/spaces.example.thing/3jui7kd54zh2y",
+            "at://did:plc:abc/space.example.thing/3jui7kd54zh2y",
+            "at://did:plc:abc",
+            "at:/did:plc:abc/space/x",
+            "at://did:plc:abc is me, see /space for more",
+        ] {
+            assert!(!contains_space_uri(text), "{text}");
+        }
     }
 
     #[test]

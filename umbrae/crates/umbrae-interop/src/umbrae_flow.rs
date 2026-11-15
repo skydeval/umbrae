@@ -278,7 +278,7 @@ pub(crate) fn run(
     let reply_cid_ok = r.json()["cid"] == json!(cid_of(&reply)?);
     write(bob, LIKE, "3mbaaaaaaaab4", &like)?.ok("like")?;
     report.check(
-        "umbrae: a public record quoting the hidden post is caught before writing",
+        "umbrae: leaks_hidden refuses a public quote of the hidden post; the reply's CID matches the PDS",
         {
             let quote = json!({ "$type": "app.bsky.feed.post", "text": "look",
                 "embed": { "$type": "app.bsky.embed.record", "record": parent } });
@@ -302,7 +302,15 @@ pub(crate) fn run(
     let got: BTreeSet<_> = synced.writers.iter().cloned().collect();
     report.check(
         "umbrae: the writer set is Alice and Bob; Carol's write isn't tracked",
-        if got == expect {
+        // Carol's PDS accepts the write into her own repo; only then does
+        // leaving her out of the writer set prove anything.
+        if carol_write.status != 200 {
+            Err(format!(
+                "carol's write was refused (HTTP {} {}), so the writer set proves nothing",
+                carol_write.status,
+                carol_write.error_name()
+            ))
+        } else if got == expect {
             Ok(format!("carol's write: HTTP {}", carol_write.status))
         } else {
             Err(format!("{got:?}"))
@@ -362,6 +370,7 @@ pub(crate) fn run(
         !can_view_space(c, &state, &ctx),
         !can_view_space(None, &state, &ctx),
         can_view_record(a, &reply_uri, &state, &ctx),
+        can_view_record(b, &post_uri, &state, &ctx),
         !can_view_record(c, &post_uri, &state, &ctx),
         !can_view_record(a, &carol_uri, &state, &ctx),
         can_write(&bob.did, &state, &ctx),
