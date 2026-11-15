@@ -5,6 +5,7 @@ members = [
     "crates/umbrae-core",
     "crates/umbrae-interop",
     "crates/umbrae-lexicons",
+    "crates/umbrae-sync",
 ]
 
 [workspace.package]

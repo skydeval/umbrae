@@ -8,7 +8,8 @@
 //! commit, the STAR archive and the operation log. Every check runs our
 //! code against the reference implementation's, in both directions.
 //! Then `umbrae_flow` runs the hidden-post flow with the `umbrae` crates,
-//! and `labeler_flow` the private-labeler flow.
+//! `labeler_flow` the private-labeler flow, and `sync_flow` the
+//! `umbrae-sync` crate end to end, notifications included.
 //!
 //! Run by `scripts/interop.sh` on the build machine; never against a public
 //! service.
@@ -16,6 +17,7 @@
 mod labeler_flow;
 mod lexjson;
 mod plc;
+mod sync_flow;
 mod umbrae_flow;
 
 use p256::ecdsa::SigningKey;
@@ -746,7 +748,8 @@ fn run(pds: &Pds, dir: &plc::Directory, report: &mut Report) -> Result<(), Strin
     );
 
     umbrae_flow::run(pds, dir, report, &alice, &bob, &carol)?;
-    labeler_flow::run(pds, dir, report, &carol)
+    labeler_flow::run(pds, dir, report, &carol)?;
+    sync_flow::run(pds, dir, report, &alice, &bob)
 }
 
 fn expect_refusal(r: &Resp, name: Option<&str>) -> Result<String, String> {

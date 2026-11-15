@@ -48,6 +48,13 @@ server {
 	ssl_certificate /certs/client.pem;
 	ssl_certificate_key /certs/client.key;
 	root /client;
+	# Space notifications, to the harness. Resolved per request, as the
+	# harness starts after this server does.
+	resolver 127.0.0.11 valid=10s;
+	set \$harness http://$HARNESS:2583;
+	location /xrpc/ {
+		proxy_pass \$harness;
+	}
 }
 EOF
 

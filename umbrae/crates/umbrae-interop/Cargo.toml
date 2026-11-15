@@ -17,4 +17,5 @@ tiny_http = "0.12"
 umbrae = { path = "../umbrae" }
 umbrae-core = { path = "../umbrae-core" }
 umbrae-lexicons = { path = "../umbrae-lexicons" }
+umbrae-sync = { path = "../umbrae-sync" }
 ureq = { version = "2", default-features = false, features = ["json"] }

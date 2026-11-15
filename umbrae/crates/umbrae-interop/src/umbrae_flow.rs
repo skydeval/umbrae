@@ -119,7 +119,9 @@ pub(crate) fn sync(
     let mut writers: Vec<String> = w["repos"]
         .as_array()
         .map(|a| {
+            // Removed repos are listed too, as repoRemoved: they aren't writers.
             a.iter()
+                .filter(|r| r["$type"] == "com.atproto.space.defs#repoWrite")
                 .filter_map(|r| r["repo"].as_str().map(str::to_owned))
                 .collect()
         })
