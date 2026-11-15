@@ -49,7 +49,7 @@ impl ViewContext for Ctx {
     }
 }
 
-fn map(v: &Value) -> Result<BTreeMap<String, D>, String> {
+pub(crate) fn map(v: &Value) -> Result<BTreeMap<String, D>, String> {
     match lexjson::to_drisl(v)? {
         D::Map(m) => Ok(m),
         _ => Err("not an object".into()),
@@ -62,7 +62,7 @@ fn cid_of(v: &Value) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-fn delegation(pds: &Pds, space: &str, who: &Account) -> Result<String, String> {
+pub(crate) fn delegation(pds: &Pds, space: &str, who: &Account) -> Result<String, String> {
     Ok(pds
         .get(
             "com.atproto.space.getDelegationToken",
@@ -78,27 +78,30 @@ fn delegation(pds: &Pds, space: &str, who: &Account) -> Result<String, String> {
 
 /// An app's view of the space: a credential, the writer set and every
 /// writer's repo, each MAC-checked and verified against its commit.
-struct Synced {
-    writers: Vec<String>,
-    repos: BTreeMap<String, Vec<ArchivedRecord>>,
+pub(crate) struct Synced {
+    pub(crate) writers: Vec<String>,
+    pub(crate) repos: BTreeMap<String, Vec<ArchivedRecord>>,
 }
 
-fn sync(
+/// Sync through `via`'s delegation, presenting `attestation` when the
+/// space restricts apps.
+pub(crate) fn sync(
     pds: &Pds,
     dir: &crate::plc::Directory,
     space: &SpaceRef,
     via: &Account,
+    attestation: Option<&str>,
 ) -> Result<Synced, String> {
     let space_str = space.to_string();
     let key = SigningKey::random(&mut OsRng);
     let kid = didkey::format_p256(&key.verifying_key().into());
     let token = delegation(pds, &space_str, via)?;
+    let mut body = json!({ "space": space_str, "credentialKey": kid, "delegationToken": token });
+    if let Some(a) = attestation {
+        body["clientAttestation"] = json!(a);
+    }
     let credential = pds
-        .post(
-            "com.atproto.space.authorizeSpaceSync",
-            &json!({ "space": space_str, "credentialKey": kid, "delegationToken": token }),
-            &vec![],
-        )?
+        .post("com.atproto.space.authorizeSpaceSync", &body, &vec![])?
         .ok("authorizeSpaceSync")?
         .json()["credential"]
         .as_str()
@@ -294,7 +297,7 @@ pub(crate) fn run(
     let carol_write = write(carol, POST, "3mbaaaaaaaab5", &carol_post)?;
 
     // An app syncs through Bob's delegation.
-    let synced = sync(pds, dir, &space, bob)?;
+    let synced = sync(pds, dir, &space, bob, None)?;
     let expect: BTreeSet<_> = [alice.did.clone(), bob.did.clone()].into();
     let got: BTreeSet<_> = synced.writers.iter().cloned().collect();
     report.check(
@@ -412,7 +415,7 @@ pub(crate) fn run(
         &alice.auth(),
     )?
     .ok("removeMembers")?;
-    let after = sync(pds, dir, &space, alice)?;
+    let after = sync(pds, dir, &space, alice, None)?;
     let state = state_of(&space, &after);
     report.check(
         "umbrae: after removal Bob's member record is gone, and so are his view and his reply",

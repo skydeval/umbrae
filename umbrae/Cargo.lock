@@ -787,6 +787,7 @@ name = "umbrae-interop"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "k256",
  "p256",
  "rand_core",
  "serde_json",

@@ -7,11 +7,13 @@
 //! to our own key, credential-use signatures, KEM key shares and MACs, the
 //! commit, the STAR archive and the operation log. Every check runs our
 //! code against the reference implementation's, in both directions.
-//! Then `umbrae_flow` runs the hidden-post flow with the `umbrae` crates.
+//! Then `umbrae_flow` runs the hidden-post flow with the `umbrae` crates,
+//! and `labeler_flow` the private-labeler flow.
 //!
 //! Run by `scripts/interop.sh` on the build machine; never against a public
 //! service.
 
+mod labeler_flow;
 mod lexjson;
 mod plc;
 mod umbrae_flow;
@@ -743,7 +745,8 @@ fn run(pds: &Pds, dir: &plc::Directory, report: &mut Report) -> Result<(), Strin
         },
     );
 
-    umbrae_flow::run(pds, dir, report, &alice, &bob, &carol)
+    umbrae_flow::run(pds, dir, report, &alice, &bob, &carol)?;
+    labeler_flow::run(pds, dir, report, &carol)
 }
 
 fn expect_refusal(r: &Resp, name: Option<&str>) -> Result<String, String> {
