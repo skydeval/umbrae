@@ -22,8 +22,9 @@ mod labeler;
 mod validate;
 
 pub use labeler::{
-    is_public_subject, validate_labeler_record, BlobRef, Label, LabelerPolicies, LabelerProfile,
-    LabelerReasons, LabelerRecord, Reason, ReasonStrings,
+    is_public_subject, label_subject, validate_labeler_record, BlobRef, Label, LabelSubject,
+    LabelerPolicies, LabelerProfile, LabelerReasons, LabelerRecord, Reason, ReasonGroup,
+    ReasonStrings,
 };
 pub use validate::{
     validate_record, Group, Invalid, Like, Post, PublicUri, Record, Reply, StrongRef, Target,

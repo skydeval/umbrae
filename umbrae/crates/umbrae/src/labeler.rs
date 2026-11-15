@@ -16,14 +16,15 @@
 //! Labels carry the standard label signature ([`sign_label`],
 //! [`verify_label`]) with the labeler's `#atproto_label` key.
 
+use crate::access::{can_view_record, SpaceState, ViewContext};
 use crate::space::Misconfigured;
 use std::collections::BTreeMap;
 use umbrae_core::didkey::AnyKey;
 use umbrae_core::drisl::{self, Value};
 use umbrae_core::policy::{MemberAccess, MemberPolicy, Policy};
 use umbrae_core::tokens::Signer;
-use umbrae_core::uri::{SpaceRef, UriError};
-use umbrae_lexicons::{Label, LABELER_SPACE_TYPE, SELF_RKEY};
+use umbrae_core::uri::{SpaceRecordUri, SpaceRef, UriError};
+use umbrae_lexicons::{label_subject, Label, LabelSubject, LABELER_SPACE_TYPE, SELF_RKEY};
 
 /// The labeler's space.
 pub fn labeler_space(labeler: &str) -> Result<SpaceRef, UriError> {
@@ -104,6 +105,37 @@ pub fn sign_label(label: &Label, key: &Signer) -> Vec<u8> {
 }
 
 /// Whether the label carries a valid low-S signature by `key`.
+/// The hidden post a label is on, if it's on one: look up that post's
+/// space state to decide who may see the label.
+pub fn hidden_post_of(label: &Label) -> Option<SpaceRecordUri> {
+    match label_subject(&label.uri) {
+        Some(LabelSubject::HiddenPost(u)) => Some(u),
+        _ => None,
+    }
+}
+
+/// Whether `viewer` may see `label`, given that they may see the labeler
+/// at all (which the serving app decides).
+///
+/// - On a public subject: yes.
+/// - On a hidden post: only if they may see that post. `post_space` is the
+///   state of the post's space; without it, no (fail closed).
+/// - On anything else: no.
+pub fn can_view_label(
+    viewer: Option<&str>,
+    label: &Label,
+    post_space: Option<&SpaceState>,
+    ctx: &impl ViewContext,
+) -> bool {
+    match label_subject(&label.uri) {
+        Some(LabelSubject::Public) => true,
+        Some(LabelSubject::HiddenPost(uri)) => {
+            post_space.is_some_and(|s| can_view_record(viewer, &uri, s, ctx))
+        }
+        None => false,
+    }
+}
+
 pub fn verify_label(label: &Label, key: &AnyKey) -> bool {
     label
         .sig
@@ -426,5 +458,62 @@ mod tests {
             ),
             [&whole]
         );
+    }
+
+    struct Everyone;
+
+    impl ViewContext for Everyone {
+        fn is_active(&self, _: &str) -> crate::Tri {
+            crate::Tri::Yes
+        }
+
+        fn blocked(&self, _: &str, _: &str) -> crate::Tri {
+            crate::Tri::No
+        }
+    }
+
+    #[test]
+    fn labels_on_hidden_posts_follow_the_post() {
+        const ALICE: &str = "did:plc:aliceaaaaaaaaaaaaaaaaaaa";
+        const BOB: &str = "did:plc:bobbbbbbbbbbbbbbbbbbbbbb";
+        const CAROL: &str = "did:plc:carolcccccccccccccccccccc";
+        let space = crate::space::group_space(ALICE, "3mbbbbbbbbbb2").unwrap();
+        let mut state = SpaceState::new(space.clone(), Some(crate::space::group_policy(None)));
+        state.members.insert(
+            BOB,
+            MemberAccess {
+                read: true,
+                write: true,
+            },
+        );
+        let post = space
+            .record(ALICE, umbrae_lexicons::POST, "3mbaaaaaaaaa2")
+            .unwrap();
+        let on_post = label(&post.to_string(), "spam", "2026-11-14T08:00:00.000Z");
+        let on_public = label(POST_A, "spam", "2026-11-14T08:00:00.000Z");
+        let c = Everyone;
+
+        assert_eq!(hidden_post_of(&on_post), Some(post.clone()));
+        assert_eq!(hidden_post_of(&on_public), None);
+        // Members of the post's group see the label; others don't.
+        assert!(can_view_label(Some(BOB), &on_post, Some(&state), &c));
+        assert!(can_view_label(Some(ALICE), &on_post, Some(&state), &c));
+        assert!(!can_view_label(Some(CAROL), &on_post, Some(&state), &c));
+        assert!(!can_view_label(None, &on_post, Some(&state), &c));
+        // Without the post's space state, or with the wrong one: hidden.
+        assert!(!can_view_label(Some(BOB), &on_post, None, &c));
+        let other = SpaceState::new(
+            crate::space::group_space(ALICE, "3mbbbbbbbbbb3").unwrap(),
+            Some(crate::space::group_policy(None)),
+        );
+        assert!(!can_view_label(Some(BOB), &on_post, Some(&other), &c));
+        // Public subjects are as visible as the labeler.
+        assert!(can_view_label(Some(CAROL), &on_public, None, &c));
+        // A label that slipped past validation, on a like: never shown.
+        let like = space
+            .record(BOB, umbrae_lexicons::LIKE, "3mbaaaaaaaaa3")
+            .unwrap();
+        let on_like = label(&like.to_string(), "spam", "2026-11-14T08:00:00.000Z");
+        assert!(!can_view_label(Some(BOB), &on_like, Some(&state), &c));
     }
 }

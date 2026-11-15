@@ -15,6 +15,12 @@
             "maxLength": 500,
             "items": { "type": "ref", "ref": "#reason" }
           },
+          "groups": {
+            "type": "array",
+            "maxLength": 100,
+            "description": "Optional headings to show reasons under. Clients that ignore them show a flat list.",
+            "items": { "type": "ref", "ref": "#group" }
+          },
           "createdAt": { "type": "string", "format": "datetime" }
         }
       }
@@ -28,6 +34,23 @@
           "ref": "com.atproto.moderation.defs#reasonType",
           "description": "The reason code a report carries."
         },
+        "group": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "The id of a group in groups to show this reason under."
+        },
+        "locales": {
+          "type": "array",
+          "items": { "type": "ref", "ref": "#reasonStrings" }
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "required": ["id", "locales"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "locales": {
           "type": "array",
           "items": { "type": "ref", "ref": "#reasonStrings" }

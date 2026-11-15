@@ -4,12 +4,15 @@
 //! - only the authority's records count; any other repo's are refused;
 //! - a label's `src` is the authority;
 //! - a label's `uri` is a public subject (an `at://` account or record URI,
-//!   or a DID), never a space URI;
-//! - the profile, policies and reasons records sit at rkey `self`.
+//!   or a DID), or a hidden post (a `tools.umbrae.post` in a
+//!   `tools.umbrae.space` space); nothing else from inside a space;
+//! - the profile, policies and reasons records sit at rkey `self`;
+//! - a reason's `group`, if set, is one of the record's `groups`.
 
 use crate::validate::{is_datetime, is_language, string, Invalid, PublicUri};
 use crate::{
-    LABEL, LABELER_POLICIES, LABELER_PROFILE, LABELER_REASONS, LABELER_SPACE_TYPE, SELF_RKEY,
+    LABEL, LABELER_POLICIES, LABELER_PROFILE, LABELER_REASONS, LABELER_SPACE_TYPE, POST, SELF_RKEY,
+    SPACE_TYPE,
 };
 use std::collections::BTreeMap;
 use umbrae_core::cid::Cid;
@@ -72,13 +75,33 @@ pub struct ReasonStrings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reason {
     pub reason_type: String,
+    /// The id of the group it's shown under, if the labeler groups them.
+    pub group: Option<String>,
+    pub locales: Vec<ReasonStrings>,
+}
+
+/// A heading reasons are grouped under in a report form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReasonGroup {
+    pub id: String,
     pub locales: Vec<ReasonStrings>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelerReasons {
     pub reasons: Vec<Reason>,
+    /// Empty when the labeler doesn't group its reasons.
+    pub groups: Vec<ReasonGroup>,
     pub created_at: String,
+}
+
+/// What a label is on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LabelSubject {
+    /// A public account or record.
+    Public,
+    /// A hidden post. Show the label only to viewers who may see the post.
+    HiddenPost(SpaceRecordUri),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -149,14 +172,28 @@ pub fn is_public_subject(uri: &str) -> bool {
     }
 }
 
+/// What a label's `uri` names, or `None` if it may not be labelled: a
+/// public subject, or a hidden post. A like, a group record, a space
+/// without a record, or anything in another space type isn't allowed.
+pub fn label_subject(uri: &str) -> Option<LabelSubject> {
+    if !is_space_uri(uri) {
+        return is_public_subject(uri).then_some(LabelSubject::Public);
+    }
+    let u = SpaceRecordUri::parse(uri).ok()?;
+    (u.space().space_type() == SPACE_TYPE && u.collection() == POST)
+        .then_some(LabelSubject::HiddenPost(u))
+}
+
 fn label(m: &Map, authority: &str) -> Result<Label, Invalid> {
     let src = text(m, "src")?.ok_or(Invalid("label src is required"))?;
     if src != authority {
         return Err(Invalid("label src must be the labeler"));
     }
     let uri = text(m, "uri")?.ok_or(Invalid("label uri is required"))?;
-    if !is_public_subject(&uri) {
-        return Err(Invalid("label uri must be a public account or record"));
+    if label_subject(&uri).is_none() {
+        return Err(Invalid(
+            "label uri must be a public account or record, or a hidden post",
+        ));
     }
     let cid = match text(m, "cid")? {
         None => None,
@@ -312,6 +349,33 @@ fn reasons(m: &Map) -> Result<LabelerReasons, Invalid> {
         Some(Value::Array(a)) if a.len() <= 500 => a,
         _ => return Err(Invalid("reasons must be an array of at most 500")),
     };
+    let groups = match m.get("groups") {
+        None => Vec::new(),
+        Some(Value::Array(a)) if a.len() <= 100 => a
+            .iter()
+            .map(|g| {
+                let g = match g {
+                    Value::Map(g) => g,
+                    _ => return Err(Invalid("a reason group must be an object")),
+                };
+                let id = string(g, "id", 1, 128, 128)?
+                    .ok_or(Invalid("a reason group id is required"))?;
+                let locales = match g.get("locales") {
+                    Some(Value::Array(ls)) => ls
+                        .iter()
+                        .map(|l| localized(l, "title", 640, 64))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    _ => return Err(Invalid("reason group locales is required")),
+                };
+                Ok(ReasonGroup { id, locales })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => return Err(Invalid("groups must be an array of at most 100")),
+    };
+    let ids: std::collections::BTreeSet<&str> = groups.iter().map(|g| g.id.as_str()).collect();
+    if ids.len() != groups.len() {
+        return Err(Invalid("reason group ids must be unique"));
+    }
     let reasons = list
         .iter()
         .map(|r| {
@@ -323,6 +387,10 @@ fn reasons(m: &Map) -> Result<LabelerReasons, Invalid> {
                 Some(Value::Text(t)) if !t.is_empty() => t.clone(),
                 _ => return Err(Invalid("a reason type is required")),
             };
+            let group = string(r, "group", 1, 128, 128)?;
+            if group.as_deref().is_some_and(|g| !ids.contains(g)) {
+                return Err(Invalid("a reason's group must be defined in groups"));
+            }
             let locales = match r.get("locales") {
                 Some(Value::Array(ls)) => ls
                     .iter()
@@ -332,12 +400,14 @@ fn reasons(m: &Map) -> Result<LabelerReasons, Invalid> {
             };
             Ok(Reason {
                 reason_type,
+                group,
                 locales,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(LabelerReasons {
         reasons,
+        groups,
         created_at: created_at(m)?,
     })
 }
@@ -492,7 +562,44 @@ mod tests {
         for bad in [hidden.as_str(), "https://example.com", "at://not a uri", ""] {
             assert!(!is_public_subject(bad), "{bad}");
         }
-        assert!(check(LABEL, LABELER, RKEY, &label_with(&[("uri", t(&hidden))])).is_err());
+    }
+
+    #[test]
+    fn labels_on_hidden_posts_and_nothing_else_inside_a_space() {
+        let group = SpaceRef::new(BOB, "tools.umbrae.space", "3mbbbbbbbbbb2").unwrap();
+        let post = group.record(BOB, "tools.umbrae.post", RKEY).unwrap();
+        assert_eq!(
+            label_subject(&post.to_string()),
+            Some(LabelSubject::HiddenPost(post.clone()))
+        );
+        assert_eq!(label_subject(SUBJECT), Some(LabelSubject::Public));
+        assert!(check(
+            LABEL,
+            LABELER,
+            RKEY,
+            &label_with(&[("uri", t(&post.to_string()))])
+        )
+        .is_ok());
+        let like = group.record(BOB, "tools.umbrae.like", RKEY).unwrap();
+        let group_rec = group.record(BOB, "tools.umbrae.group", "self").unwrap();
+        let elsewhere = SpaceRef::new(BOB, "com.example.space", "x")
+            .unwrap()
+            .record(BOB, "tools.umbrae.post", RKEY)
+            .unwrap();
+        let labeler_rec = SpaceRef::new(LABELER, LABELER_SPACE_TYPE, "self")
+            .unwrap()
+            .record(LABELER, "tools.umbrae.post", RKEY)
+            .unwrap();
+        for bad in [
+            like.to_string(),
+            group_rec.to_string(),
+            elsewhere.to_string(),
+            labeler_rec.to_string(),
+            group.to_string(),
+        ] {
+            assert_eq!(label_subject(&bad), None, "{bad}");
+            assert!(check(LABEL, LABELER, RKEY, &label_with(&[("uri", t(&bad))])).is_err());
+        }
     }
 
     #[test]
@@ -661,5 +768,75 @@ mod tests {
             &r(vec![strings_of("en", "name")])
         )
         .is_err());
+    }
+
+    #[test]
+    fn reason_groups() {
+        let reason = |group: Option<&str>| {
+            let mut m = map(&[
+                ("type", t("com.atproto.moderation.defs#reasonSpam")),
+                ("locales", Value::Array(vec![strings_of("en", "title")])),
+            ]);
+            if let Some(g) = group {
+                m.insert("group".into(), t(g));
+            }
+            Value::Map(m)
+        };
+        let group = |id: &str| {
+            Value::Map(map(&[
+                ("id", t(id)),
+                ("locales", Value::Array(vec![strings_of("en", "title")])),
+            ]))
+        };
+        let rec = |reasons: Vec<Value>, groups: Option<Vec<Value>>| {
+            let mut m = map(&[
+                ("$type", t(LABELER_REASONS)),
+                ("reasons", Value::Array(reasons)),
+                ("createdAt", t(NOW)),
+            ]);
+            if let Some(g) = groups {
+                m.insert("groups".into(), Value::Array(g));
+            }
+            m
+        };
+        let ok = rec(
+            vec![reason(Some("abuse")), reason(None)],
+            Some(vec![group("abuse")]),
+        );
+        match check(LABELER_REASONS, LABELER, SELF_RKEY, &ok)
+            .unwrap()
+            .unwrap()
+        {
+            LabelerRecord::Reasons(r) => {
+                assert_eq!(r.groups[0].id, "abuse");
+                assert_eq!(r.reasons[0].group.as_deref(), Some("abuse"));
+                assert_eq!(r.reasons[1].group, None);
+            }
+            other => panic!("{other:?}"),
+        }
+        // Ungrouped records still validate, with no groups.
+        match check(
+            LABELER_REASONS,
+            LABELER,
+            SELF_RKEY,
+            &rec(vec![reason(None)], None),
+        )
+        .unwrap()
+        .unwrap()
+        {
+            LabelerRecord::Reasons(r) => assert!(r.groups.is_empty()),
+            other => panic!("{other:?}"),
+        }
+        for bad in [
+            rec(vec![reason(Some("missing"))], Some(vec![group("abuse")])),
+            rec(vec![reason(Some("abuse"))], None),
+            rec(
+                vec![reason(None)],
+                Some(vec![group("abuse"), group("abuse")]),
+            ),
+            rec(vec![reason(None)], Some(vec![group("")])),
+        ] {
+            assert!(check(LABELER_REASONS, LABELER, SELF_RKEY, &bad).is_err());
+        }
     }
 }

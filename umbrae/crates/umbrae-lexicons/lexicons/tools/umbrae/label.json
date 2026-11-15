@@ -22,7 +22,7 @@
           "uri": {
             "type": "string",
             "format": "uri",
-            "description": "AT URI of the public record or account labelled, or an account DID. Never a space URI."
+            "description": "What's labelled: the AT URI of a public record or account, an account DID, or the URI of a hidden post (a tools.umbrae.post in a tools.umbrae.space space). Nothing else from inside a space. A label on a hidden post is shown only to viewers who may see that post."
           },
           "cid": {
             "type": "string",
