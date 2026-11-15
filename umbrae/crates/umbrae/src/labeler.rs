@@ -104,7 +104,6 @@ pub fn sign_label(label: &Label, key: &Signer) -> Vec<u8> {
     key.sign(&label_signing_bytes(label)).to_vec()
 }
 
-/// Whether the label carries a valid low-S signature by `key`.
 /// The hidden post a label is on, if it's on one: look up that post's
 /// space state to decide who may see the label.
 pub fn hidden_post_of(label: &Label) -> Option<SpaceRecordUri> {
@@ -136,6 +135,7 @@ pub fn can_view_label(
     }
 }
 
+/// Whether the label carries a valid low-S signature by `key`.
 pub fn verify_label(label: &Label, key: &AnyKey) -> bool {
     label
         .sig

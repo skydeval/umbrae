@@ -16,16 +16,25 @@ use umbrae_core::uri::SpaceRef;
 
 /// Where the host should send `notifySpaceUpdate`, and the secret token
 /// that identifies the registration. Keep the token the same across
-/// renewals ([`crate::notify::new_token`] makes one).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// renewals ([`crate::notify::new_token`] makes one). `Debug` hides the
+/// token.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Notify {
     /// Base HTTPS URL the host calls `{endpoint}/xrpc/…` on.
     pub endpoint: String,
     pub token: String,
 }
 
-/// What to present to `authorizeSpaceSync`.
-#[derive(Debug, Clone, Copy)]
+impl fmt::Debug for Notify {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Notify")
+            .field("endpoint", &self.endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What to present to `authorizeSpaceSync`. `Debug` hides the tokens.
+#[derive(Clone, Copy)]
 pub struct Authorize<'a> {
     /// From `getDelegationToken` on a reader's own PDS. Single use, 60 s.
     pub delegation: &'a str,
@@ -33,6 +42,15 @@ pub struct Authorize<'a> {
     /// apps (`allowedApps`).
     pub attestation: Option<&'a str>,
     pub notify: Option<&'a Notify>,
+}
+
+impl fmt::Debug for Authorize<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Authorize")
+            .field("attestation", &self.attestation.is_some())
+            .field("notify", &self.notify)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A space credential and the key it's bound to.
@@ -113,6 +131,18 @@ impl Credential {
     /// Whether to renew: expired, or within `margin` seconds of it.
     pub fn needs_renewal(&self, now: i64, margin: i64) -> bool {
         now + margin >= self.expires_at
+    }
+
+    /// A credential for tests against a fake host, which doesn't check it.
+    #[cfg(test)]
+    pub(crate) fn for_tests(space: SpaceRef) -> Self {
+        Credential {
+            space,
+            token: "test".into(),
+            key: SigningKey::random(&mut OsRng),
+            expires_at: i64::MAX,
+            space_rev: None,
+        }
     }
 
     pub(crate) fn check_live(&self, now: i64) -> Result<(), SyncError> {
@@ -257,6 +287,28 @@ mod tests {
         assert_eq!(c.check_live(1000), Err(SyncError::CredentialExpired));
         let bad = s.replace(&URL_SAFE_NO_PAD.encode(c.key.to_bytes()), "AAAA");
         assert!(serde_json::from_str::<Credential>(&bad).is_err());
+    }
+
+    #[test]
+    fn debug_hides_delegations_and_registration_tokens() {
+        let n = Notify {
+            endpoint: "https://app.example".into(),
+            token: "secret-registration".into(),
+        };
+        let a = Authorize {
+            delegation: "secret-delegation",
+            attestation: Some("secret-attestation"),
+            notify: Some(&n),
+        };
+        let shown = format!("{a:?}");
+        assert!(shown.contains("https://app.example"));
+        for secret in [
+            "secret-registration",
+            "secret-delegation",
+            "secret-attestation",
+        ] {
+            assert!(!shown.contains(secret), "{secret} in {shown}");
+        }
     }
 
     #[test]

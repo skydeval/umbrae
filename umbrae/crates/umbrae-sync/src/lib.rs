@@ -10,8 +10,9 @@
 //! The usual loop for one space:
 //! 1. [`authorize`] with a reader's delegation (plus a client attestation
 //!    when the space limits apps, and a [`Notify`] registration).
-//! 2. [`sync_space`] from a [`SpaceCursor`] (empty the first time). It
-//!    returns what changed per repo and the new cursor; persist the cursor.
+//! 2. [`sync_space`] from a [`SpaceCursor`] (empty the first time), with a
+//!    lookup of the CIDs held for each record. It returns what changed per
+//!    repo and the new cursor; persist the cursor with the records.
 //! 3. On a notification ([`notify::parse_notification`], token checked with
 //!    [`notify::token_matches`]), sync again. Renew the credential before
 //!    [`Credential::expires_at`] with a fresh delegation.

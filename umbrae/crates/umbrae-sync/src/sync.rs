@@ -4,7 +4,10 @@
 //! - a commit MAC under a fresh KEM key share to the repo's account;
 //! - the commit is for the requested repo and space;
 //! - a full repo's records hash to the commit;
-//! - the op log, replayed onto our own set hash, reproduces the commit;
+//! - the op log is in order, after the cursor, and each op's `prev` is what
+//!   the caller holds; replayed onto our own set hash, it reproduces the
+//!   commit;
+//! - a repo is never older than its cursor;
 //! - every inline record value hashes to its op's CID.
 
 use crate::credential::{json_body, Credential};
@@ -23,14 +26,29 @@ use umbrae_core::drisl::{self, Value as D};
 use umbrae_core::kem::{self, Encapsulation};
 use umbrae_core::mac::{self, MacFields, MacProfile};
 use umbrae_core::repo_archive::read_repo_archive;
-use umbrae_core::uri::SpaceRecordUri;
+use umbrae_core::uri::{is_valid_tid, SpaceRecordUri};
 use umbrae_core::LtHash;
 
 type Map = BTreeMap<String, D>;
 
 /// Most pages read from one listing, so a host can't keep us paging.
 const MAX_PAGES: usize = 1000;
+/// The `limit` asked for. In an op log only a full page is followed by
+/// another, as the reference host sends a cursor only then
+/// (`listRepoOps`), so a host can't drive us with tiny pages; a log cut
+/// short only misses the commit and falls back to a full fetch.
+const PAGE_LIMIT: usize = 1000;
+/// The most op-log pages read for one repo before fetching it in full.
+const MAX_OP_PAGES: usize = 16;
 const PAGE_SIZE: &str = "1000";
+/// The most `listWriters` entries read for one listing. Counted, not
+/// sized: each entry is kept as a small `Writer` (a `data` that isn't a
+/// digest is dropped), and a response's own size is the transport's to
+/// cap, so writers can't fail the listing by sending large `data`.
+const MAX_LIST_ENTRIES: usize = 200_000;
+/// The most op-log response bytes held for one repo before its commit can
+/// be checked. Past this, the repo is fetched in full instead.
+const MAX_LOG_BYTES: usize = 16 * 1024 * 1024;
 
 const REPO_WRITE: &str = "com.atproto.space.defs#repoWrite";
 const REPO_REMOVED: &str = "com.atproto.space.defs#repoRemoved";
@@ -40,8 +58,12 @@ const REPO_REMOVED: &str = "com.atproto.space.defs#repoRemoved";
 pub struct Writer {
     pub repo: String,
     pub repo_rev: String,
-    /// The digest of the repo's set hash at that revision.
-    pub data: [u8; 32],
+    /// The digest of the repo's set hash at that revision. `None` when the
+    /// host listed bytes that aren't a digest: the lexicon doesn't fix the
+    /// length, and the repo's own host supplies them, so one writer's bad
+    /// value mustn't stop the whole listing. Such a writer is never skipped
+    /// as unchanged.
+    pub data: Option<[u8; 32]>,
 }
 
 /// The writer set: who's in it, and who's been removed from it recently.
@@ -123,7 +145,8 @@ pub struct SpaceCursor {
 /// What changed in one repo since the cursor.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RepoChange {
-    /// The whole repo, fetched fresh: replace whatever was held for it.
+    /// The whole repo, fetched fresh: replace whatever was held for it. No
+    /// records when its host no longer has the repo.
     Replaced {
         repo: String,
         records: Vec<SyncedRecord>,
@@ -176,6 +199,7 @@ pub async fn list_writers<T: Transport, D2: Directory>(
     let host = directory.resolve(authority, false).await?;
     let mut latest: BTreeMap<String, Option<Writer>> = BTreeMap::new();
     let mut page: Option<String> = None;
+    let mut listed = 0usize;
     for _ in 0..MAX_PAGES {
         let mut query = vec![
             ("space", space.to_string()),
@@ -198,12 +222,22 @@ pub async fn list_writers<T: Transport, D2: Directory>(
         let repos = j["repos"]
             .as_array()
             .ok_or(SyncError::Malformed("listWriters repos"))?;
+        listed = listed.saturating_add(repos.len());
+        if listed > MAX_LIST_ENTRIES {
+            return Err(SyncError::Malformed("listWriters too long"));
+        }
         for e in repos {
+            let kind = e["$type"].as_str();
+            // The union is open: skip entries of a kind this version doesn't
+            // know, as the reference syncer does.
+            if !matches!(kind, Some(REPO_WRITE | REPO_REMOVED)) {
+                continue;
+            }
             let repo = e["repo"]
                 .as_str()
                 .ok_or(SyncError::Malformed("listWriters repo"))?
                 .to_owned();
-            match e["$type"].as_str() {
+            match kind {
                 Some(REPO_WRITE) => {
                     let w = Writer {
                         repo: repo.clone(),
@@ -211,17 +245,21 @@ pub async fn list_writers<T: Transport, D2: Directory>(
                             .as_str()
                             .ok_or(SyncError::Malformed("listWriters repoRev"))?
                             .to_owned(),
-                        data: json::digest(&e["data"])
-                            .ok_or(SyncError::Malformed("listWriters data"))?,
+                        data: match json::bytes(&e["data"]) {
+                            Some(b) => b.try_into().ok(),
+                            None => return Err(SyncError::Malformed("listWriters data")),
+                        },
                     };
                     latest.insert(repo, Some(w));
                 }
-                Some(REPO_REMOVED) => {
+                _ => {
                     latest.insert(repo, None);
                 }
-                _ => return Err(SyncError::Malformed("listWriters entry type")),
             }
         }
+        // Follow any new cursor on a non-empty page, as the reference syncer
+        // does: stopping early would read held writers as removed. Paging
+        // is bounded by `MAX_PAGES` and `MAX_LIST_ENTRIES`.
         match j["cursor"].as_str() {
             Some(c) if !repos.is_empty() && page.as_deref() != Some(c) => page = Some(c.to_owned()),
             _ => {
@@ -239,7 +277,15 @@ pub async fn list_writers<T: Transport, D2: Directory>(
     Err(SyncError::Malformed("listWriters never ended"))
 }
 
+/// Whether a failure may come from a stale `#atproto_kem` key, so is worth
+/// one retry with the DID document re-resolved past any cache.
+fn kem_may_be_stale(e: &SyncError) -> bool {
+    matches!(e, SyncError::Mac(_) | SyncError::MissingKey(_))
+}
+
 /// One repo in full, from its account's PDS, verified against its commit.
+/// A failed MAC is retried once with the account's KEM key re-resolved, as
+/// it may have rotated.
 pub async fn fetch_repo<T: Transport, D2: Directory>(
     transport: &T,
     directory: &D2,
@@ -247,9 +293,25 @@ pub async fn fetch_repo<T: Transport, D2: Directory>(
     repo: &str,
     now: i64,
 ) -> Result<(RepoCursor, Vec<SyncedRecord>), SyncError> {
+    match fetch_repo_once(transport, directory, cred, repo, now, false).await {
+        Err(e) if kem_may_be_stale(&e) => {
+            fetch_repo_once(transport, directory, cred, repo, now, true).await
+        }
+        r => r,
+    }
+}
+
+async fn fetch_repo_once<T: Transport, D2: Directory>(
+    transport: &T,
+    directory: &D2,
+    cred: &Credential,
+    repo: &str,
+    now: i64,
+    refresh: bool,
+) -> Result<(RepoCursor, Vec<SyncedRecord>), SyncError> {
     cred.check_live(now)?;
     let space = cred.space();
-    let id = directory.resolve(repo, false).await?;
+    let id = directory.resolve(repo, refresh).await?;
     let kem_key = id.kem_key.ok_or(SyncError::MissingKey("#atproto_kem"))?;
     let enc = kem::encapsulate(&kem_key).map_err(|_| SyncError::MissingKey("#atproto_kem"))?;
     let mut headers = cred.headers(repo);
@@ -303,8 +365,9 @@ fn verify_commit(
         .map_err(SyncError::Commit)
 }
 
-fn cid_field(v: &Value) -> Result<Option<Cid>, SyncError> {
-    match v {
+/// An op's `cid` or `prev`: required, but nullable.
+fn cid_field(v: Option<&Value>) -> Result<Option<Cid>, SyncError> {
+    match v.ok_or(SyncError::Malformed("op cid"))? {
         Value::Null => Ok(None),
         Value::String(s) => Cid::parse(s)
             .map(Some)
@@ -313,26 +376,70 @@ fn cid_field(v: &Value) -> Result<Option<Cid>, SyncError> {
     }
 }
 
-/// The ops after `cursor`, replayed onto its set hash and checked against
-/// the repo's current commit. [`SyncError::DigestMismatch`] (or an
-/// `InvalidCursor` from the host) means the log can't bridge the gap:
-/// fetch the repo in full.
-pub async fn fetch_ops<T: Transport, D2: Directory>(
+/// The ops after `cursor`, checked against what the caller holds and
+/// replayed onto the cursor's set hash, which must then match the repo's
+/// current commit.
+///
+/// `held(collection, rkey)` is the CID the caller holds for that record of
+/// this repo, as of the cursor (`None` if it holds none). Each op's `prev`
+/// must be that, or what an earlier op in the log left, so the ops the
+/// caller applies are the ones the commit covers.
+///
+/// [`SyncError::DigestMismatch`], [`SyncError::Gap`],
+/// [`SyncError::RecordMismatch`] (or an `InvalidCursor` from the host) mean
+/// the log can't bridge the gap: fetch the repo in full. A failed MAC is
+/// retried once with the account's KEM key re-resolved.
+pub async fn fetch_ops<T, D2, H>(
     transport: &T,
     directory: &D2,
     cred: &Credential,
     cursor: &RepoCursor,
+    held: &H,
     now: i64,
-) -> Result<(RepoCursor, Vec<Op>), SyncError> {
+) -> Result<(RepoCursor, Vec<Op>), SyncError>
+where
+    T: Transport,
+    D2: Directory,
+    H: Fn(&str, &str) -> Option<Cid> + Sync,
+{
+    match fetch_ops_once(transport, directory, cred, cursor, held, now, false).await {
+        Err(e) if kem_may_be_stale(&e) => {
+            fetch_ops_once(transport, directory, cred, cursor, held, now, true).await
+        }
+        r => r,
+    }
+}
+
+async fn fetch_ops_once<T, D2, H>(
+    transport: &T,
+    directory: &D2,
+    cred: &Credential,
+    cursor: &RepoCursor,
+    held: &H,
+    now: i64,
+    refresh: bool,
+) -> Result<(RepoCursor, Vec<Op>), SyncError>
+where
+    T: Transport,
+    D2: Directory,
+    H: Fn(&str, &str) -> Option<Cid> + Sync,
+{
     cred.check_live(now)?;
     let space = cred.space();
     let repo = cursor.repo.as_str();
-    let id = directory.resolve(repo, false).await?;
+    let id = directory.resolve(repo, refresh).await?;
     let kem_key = id.kem_key.ok_or(SyncError::MissingKey("#atproto_kem"))?;
-    let mut hash = cursor.hash()?;
+    // A cursor whose state won't decode can't be replayed onto: fetch in full.
+    let mut hash = cursor
+        .hash()
+        .map_err(|_| SyncError::Gap("cursor state won't decode"))?;
+    let mut log_bytes = 0usize;
     let mut ops = Vec::new();
+    // What each path touched so far holds after its latest op.
+    let mut current: BTreeMap<(String, String), Option<Cid>> = BTreeMap::new();
+    let mut last_rev = cursor.rev.clone();
     let mut page: Option<String> = None;
-    for _ in 0..MAX_PAGES {
+    for n in 0..MAX_OP_PAGES {
         let enc = kem::encapsulate(&kem_key).map_err(|_| SyncError::MissingKey("#atproto_kem"))?;
         let mut headers = cred.headers(repo);
         headers.push(mac_request(&enc));
@@ -355,15 +462,29 @@ pub async fn fetch_ops<T: Transport, D2: Directory>(
                 body: None,
             })
             .await?;
+        // The digest can only be checked after the last page, so cap what a
+        // log may hold until then; a longer gap is cheaper as one getRepo.
+        log_bytes = log_bytes.saturating_add(r.body.len());
+        if log_bytes > MAX_LOG_BYTES {
+            return Err(SyncError::Gap("op log too long"));
+        }
         let j = json_body(&r)?;
         let commit = json::commit(&j["commit"])?;
-        verify_commit(
+        match verify_commit(
             &commit,
             repo,
             cred,
             &enc,
             &header_fields(&r, MacProfile::Commit),
-        )?;
+        ) {
+            Ok(()) => {}
+            // Earlier pages verified under this key, so it isn't stale:
+            // don't replay the log with a refreshed one, fetch in full.
+            Err(SyncError::Mac(_)) if n > 0 => {
+                return Err(SyncError::Gap("MAC failed partway through the log"))
+            }
+            Err(e) => return Err(e),
+        }
         let entries = j["ops"].as_array().ok_or(SyncError::Malformed("ops"))?;
         for e in entries {
             let collection = e["collection"]
@@ -374,8 +495,28 @@ pub async fn fetch_ops<T: Transport, D2: Directory>(
                 .as_str()
                 .ok_or(SyncError::Malformed("op rkey"))?
                 .to_owned();
-            let cid = cid_field(&e["cid"])?;
-            let prev = cid_field(&e["prev"])?;
+            let cid = cid_field(e.get("cid"))?;
+            let prev = cid_field(e.get("prev"))?;
+            let rev = e["rev"]
+                .as_str()
+                .filter(|r| is_valid_tid(r))
+                .ok_or(SyncError::Malformed("op rev"))?
+                .to_owned();
+            // Ops come in revision order, all after the cursor; ops that
+            // share a revision were one commit.
+            if rev <= cursor.rev || rev < last_rev {
+                return Err(SyncError::Gap("ops out of order"));
+            }
+            last_rev.clone_from(&rev);
+            let path = (collection.clone(), rkey.clone());
+            let before = match current.get(&path) {
+                Some(c) => *c,
+                None => held(&collection, &rkey),
+            };
+            if prev != before {
+                return Err(SyncError::Gap("an op's prev isn't what we hold"));
+            }
+            current.insert(path, cid);
             hash.apply_op(&RepoOp {
                 collection: collection.clone(),
                 rkey: rkey.clone(),
@@ -383,27 +524,25 @@ pub async fn fetch_ops<T: Transport, D2: Directory>(
                 prev,
             })
             .map_err(SyncError::Op)?;
-            let record = match (e.get("value").filter(|v| !v.is_null()), cid) {
-                (Some(v), Some(c)) => {
-                    let value = json::to_map(v)?;
+            let record = match e.get("value").filter(|v| !v.is_null()) {
+                Some(v) => {
+                    let c = cid.ok_or(SyncError::RecordMismatch)?;
+                    let value = json::to_map(v).map_err(|_| SyncError::RecordMismatch)?;
                     let ours = drisl::encode(&D::Map(value.clone()))
                         .map(|b| Cid::for_drisl(&b))
-                        .map_err(|_| SyncError::Malformed("op value"))?;
+                        .map_err(|_| SyncError::RecordMismatch)?;
                     if ours != c {
-                        return Err(SyncError::Malformed("op value doesn't match its CID"));
+                        return Err(SyncError::RecordMismatch);
                     }
                     let uri = space
                         .record(repo, &collection, &rkey)
                         .map_err(|_| SyncError::Malformed("op path"))?;
                     Some(record(uri, c, value))
                 }
-                _ => None,
+                None => None,
             };
             ops.push(Op {
-                rev: e["rev"]
-                    .as_str()
-                    .ok_or(SyncError::Malformed("op rev"))?
-                    .to_owned(),
+                rev,
                 collection,
                 rkey,
                 cid,
@@ -412,10 +551,15 @@ pub async fn fetch_ops<T: Transport, D2: Directory>(
             });
         }
         match j["cursor"].as_str() {
-            Some(c) if !entries.is_empty() && page.as_deref() != Some(c) => {
+            // The host sends a cursor only on a full page; a short one is
+            // the last, and its commit is the one to check.
+            Some(c) if entries.len() >= PAGE_LIMIT && page.as_deref() != Some(c) => {
                 page = Some(c.to_owned())
             }
             _ => {
+                if commit.rev() < cursor.rev.as_str() {
+                    return Err(SyncError::Gap("repo is older than its cursor"));
+                }
                 if !commit.matches(&hash) {
                     return Err(SyncError::DigestMismatch);
                 }
@@ -423,7 +567,8 @@ pub async fn fetch_ops<T: Transport, D2: Directory>(
             }
         }
     }
-    Err(SyncError::Malformed("listRepoOps never ended"))
+    // A longer log is cheaper, and as safe, as one getRepo.
+    Err(SyncError::Gap("op log has too many pages"))
 }
 
 /// Whether every path's last op that leaves a record behind carries it.
@@ -438,7 +583,12 @@ fn ops_complete(ops: &[Op]) -> bool {
 
 fn needs_full_fetch(e: &SyncError) -> bool {
     match e {
-        SyncError::DigestMismatch | SyncError::Op(_) => true,
+        SyncError::DigestMismatch
+        | SyncError::Op(_)
+        | SyncError::Gap(_)
+        | SyncError::RecordMismatch
+        | SyncError::Mac(_)
+        | SyncError::Commit(_) => true,
         SyncError::Xrpc { error, .. } => error.as_str() == "InvalidCursor",
         _ => false,
     }
@@ -446,61 +596,101 @@ fn needs_full_fetch(e: &SyncError) -> bool {
 
 /// Bring a space up to date from `cursor`: list the writer set, then for
 /// each writer, skip it if unchanged, replay its op log, or fetch it in
-/// full. Returns the new cursor and what changed. A writer whose host fails
-/// shows up as [`RepoChange::Failed`] and keeps its old cursor.
-pub async fn sync_space<T: Transport, D2: Directory>(
+/// full. Returns the new cursor and what changed.
+///
+/// `held(repo, collection, rkey)` is the CID the caller holds for a record,
+/// as of `cursor`: every record synced so far, whatever it was
+/// [`Checked`] as. Op logs are checked against it (see [`fetch_ops`]).
+///
+/// - A writer whose host fails shows up as [`RepoChange::Failed`] and keeps
+///   its old cursor.
+/// - A writer whose host has no repo for it (`RepoNotFound`) is
+///   [`RepoChange::Replaced`] with no records, if anything was held.
+/// - A repo older than its cursor is refused as `Failed`.
+pub async fn sync_space<T, D2, H>(
     transport: &T,
     directory: &D2,
     cred: &Credential,
     cursor: &SpaceCursor,
+    held: &H,
     now: i64,
-) -> Result<(SpaceCursor, Vec<RepoChange>), SyncError> {
+) -> Result<(SpaceCursor, Vec<RepoChange>), SyncError>
+where
+    T: Transport,
+    D2: Directory,
+    H: Fn(&str, &str, &str) -> Option<Cid> + Sync,
+{
     let writers = list_writers(transport, directory, cred, now).await?;
     let mut next = SpaceCursor::default();
     let mut changes = Vec::new();
     let active: BTreeSet<&str> = writers.active.iter().map(|w| w.repo.as_str()).collect();
     for w in &writers.active {
-        let held = cursor.repos.get(&w.repo);
-        if let Some(c) = held {
-            if c.rev == w.repo_rev && c.digest() == Some(w.data) {
-                next.repos.insert(w.repo.clone(), c.clone());
+        let repo = w.repo.as_str();
+        // A stored cursor filed under another repo's key isn't this repo's.
+        let held_cursor = cursor.repos.get(repo).filter(|c| c.repo == repo);
+        let gone = || RepoChange::Replaced {
+            repo: repo.to_owned(),
+            records: Vec::new(),
+        };
+        if let Some(c) = held_cursor {
+            if c.rev == w.repo_rev && w.data.is_some() && c.digest() == w.data {
+                next.repos.insert(repo.to_owned(), c.clone());
                 continue;
             }
-            match fetch_ops(transport, directory, cred, c, now).await {
+            let lookup = |collection: &str, rkey: &str| held(repo, collection, rkey);
+            match fetch_ops(transport, directory, cred, c, &lookup, now).await {
                 Ok((nc, ops)) if ops_complete(&ops) => {
-                    next.repos.insert(w.repo.clone(), nc);
+                    next.repos.insert(repo.to_owned(), nc);
                     changes.push(RepoChange::Ops {
-                        repo: w.repo.clone(),
+                        repo: repo.to_owned(),
                         ops,
                     });
                     continue;
                 }
                 Ok(_) => {}
+                Err(e) if e.is_repo_not_found() => {
+                    changes.push(gone());
+                    continue;
+                }
                 Err(e) if needs_full_fetch(&e) => {}
                 Err(error) => {
-                    next.repos.insert(w.repo.clone(), c.clone());
+                    next.repos.insert(repo.to_owned(), c.clone());
                     changes.push(RepoChange::Failed {
-                        repo: w.repo.clone(),
+                        repo: repo.to_owned(),
                         error,
                     });
                     continue;
                 }
             }
         }
-        match fetch_repo(transport, directory, cred, &w.repo, now).await {
+        match fetch_repo(transport, directory, cred, repo, now).await {
+            Ok((nc, _)) if held_cursor.is_some_and(|c| nc.rev < c.rev) => {
+                if let Some(c) = held_cursor {
+                    next.repos.insert(repo.to_owned(), c.clone());
+                }
+                changes.push(RepoChange::Failed {
+                    repo: repo.to_owned(),
+                    error: SyncError::Gap("repo is older than its cursor"),
+                });
+            }
             Ok((nc, records)) => {
-                next.repos.insert(w.repo.clone(), nc);
+                next.repos.insert(repo.to_owned(), nc);
                 changes.push(RepoChange::Replaced {
-                    repo: w.repo.clone(),
+                    repo: repo.to_owned(),
                     records,
                 });
             }
+            Err(e) if e.is_repo_not_found() => {
+                if held_cursor.is_some() {
+                    changes.push(gone());
+                }
+            }
             Err(error) => {
-                if let Some(c) = held {
-                    next.repos.insert(w.repo.clone(), c.clone());
+                if let Some(c) = held_cursor {
+                    next.repos.insert(repo.to_owned(), c.clone());
                 }
                 changes.push(RepoChange::Failed {
-                    repo: w.repo.clone(),
+                    repo: repo.to_owned(),
                     error,
                 });
             }
@@ -573,6 +763,11 @@ mod tests {
     #[test]
     fn full_fetch_fallbacks() {
         assert!(needs_full_fetch(&SyncError::DigestMismatch));
+        assert!(needs_full_fetch(&SyncError::Gap("x")));
+        assert!(needs_full_fetch(&SyncError::RecordMismatch));
+        assert!(needs_full_fetch(&SyncError::Mac(
+            umbrae_core::SignatureError::Invalid
+        )));
         assert!(needs_full_fetch(&SyncError::Xrpc {
             status: 400,
             error: crate::error::XrpcName::new("InvalidCursor")
@@ -582,5 +777,603 @@ mod tests {
             error: crate::error::XrpcName::new("SpaceNotFound")
         }));
         assert!(!needs_full_fetch(&SyncError::CredentialExpired));
+    }
+
+    /// A repo host and directory in one, answering with real MACs.
+    mod fake {
+        use super::super::*;
+        use crate::transport::{Identity, ResolveError, Response, TransportError};
+        use base64::engine::general_purpose::STANDARD;
+        use p256::SecretKey;
+        use rand_core::OsRng;
+        use serde_json::json;
+        use std::future::Future;
+        use std::pin::pin;
+        use std::task::{Context, Poll, Waker};
+        use umbrae_core::didkey;
+        use umbrae_core::repo_archive::write_repo_archive;
+        use umbrae_core::uri::SpaceRef;
+
+        pub const REPO: &str = "did:example:bob";
+        pub const POST: &str = "tools.umbrae.post";
+        pub const RKEY: &str = "3mbaaaaaaaaa2";
+        pub const R1: &str = "3mbaaaaaaab22";
+        pub const R2: &str = "3mbaaaaaaab33";
+        pub const R3: &str = "3mbaaaaaaab44";
+
+        pub fn block_on<F: Future>(f: F) -> F::Output {
+            let mut f = pin!(f);
+            let mut cx = Context::from_waker(Waker::noop());
+            loop {
+                if let Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+                    return v;
+                }
+            }
+        }
+
+        pub fn space() -> SpaceRef {
+            SpaceRef::new("did:example:alice", "tools.umbrae.space", "3mbbbbbbbbbb2").unwrap()
+        }
+
+        /// A post's JSON, DRISL bytes and CID.
+        pub fn post(text: &str) -> (Value, Vec<u8>, Cid) {
+            let v = json!({ "$type": POST, "text": text, "createdAt": "2026-11-14T10:00:00Z" });
+            let bytes = drisl::encode(&D::Map(json::to_map(&v).unwrap())).unwrap();
+            let cid = Cid::for_drisl(&bytes);
+            (v, bytes, cid)
+        }
+
+        pub fn hash_of(records: &[(Vec<u8>, Cid)]) -> LtHash {
+            let mut h = LtHash::new();
+            for (_, cid) in records {
+                h.add_record_cid(POST, RKEY, cid);
+            }
+            h
+        }
+
+        /// One repo, `REPO`, holding at most one post at `RKEY`.
+        pub struct Host {
+            pub kem: SecretKey,
+            /// The KEM key a cached (unrefreshed) resolve returns.
+            pub cached_kem: Option<String>,
+            pub rev: &'static str,
+            pub records: Vec<(Vec<u8>, Cid)>,
+            pub ops: Value,
+            pub extra_writers: Vec<Value>,
+            /// An error name for every repo request.
+            pub refuse: Option<&'static str>,
+            /// What `listWriters` lists as `data`, in place of the digest.
+            pub writer_data: Option<Value>,
+            /// Paged answers, in place of `ops` or the one-page listing:
+            /// page `i` is asked for with cursor `p{i}` (none for page 0),
+            /// and carries the cursor given with it.
+            pub ops_pages: Vec<(Value, Option<&'static str>)>,
+            pub writer_pages: Vec<(Vec<Value>, Option<&'static str>)>,
+            /// From this op-log page on, MACs are made with a wrong secret.
+            pub bad_mac_from_page: Option<usize>,
+            /// How many requests reached the host.
+            pub requests: std::sync::atomic::AtomicUsize,
+        }
+
+        /// Which page a request asks for.
+        fn page_of(req: &Request) -> usize {
+            req.query
+                .iter()
+                .find(|(k, _)| *k == "cursor")
+                .and_then(|(_, v)| v.strip_prefix('p')?.parse().ok())
+                .unwrap_or(0)
+        }
+
+        impl Host {
+            pub fn new(rev: &'static str, records: Vec<(Vec<u8>, Cid)>) -> Self {
+                Host {
+                    kem: SecretKey::random(&mut OsRng),
+                    cached_kem: None,
+                    rev,
+                    records,
+                    ops: json!([]),
+                    extra_writers: Vec::new(),
+                    refuse: None,
+                    writer_data: None,
+                    ops_pages: Vec::new(),
+                    writer_pages: Vec::new(),
+                    bad_mac_from_page: None,
+                    requests: Default::default(),
+                }
+            }
+
+            fn commit(&self) -> Commit {
+                Commit::from_parts(1, REPO, space(), self.rev, hash_of(&self.records).digest())
+                    .unwrap()
+            }
+
+            fn mac(&self, req: &Request) -> Vec<(String, String)> {
+                let asked = req
+                    .headers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("accept-signature"))
+                    .map(|(_, v)| v.as_str());
+                let r = mac::parse_mac_request(asked, MacProfile::Commit)
+                    .unwrap()
+                    .unwrap();
+                let mut secret = kem::decapsulate(&self.kem, &r.key_share).unwrap();
+                if self.bad_mac_from_page.is_some_and(|p| page_of(req) >= p) {
+                    secret = [0u8; 32];
+                }
+                let h = mac::commit_mac_headers(&self.commit(), &r, &secret);
+                vec![
+                    (h.covered_name.into(), h.covered_value),
+                    ("signature-input".into(), h.signature_input),
+                    ("signature".into(), h.signature),
+                ]
+            }
+        }
+
+        fn reply(status: u16, headers: Vec<(String, String)>, body: Vec<u8>) -> Response {
+            Response {
+                status,
+                headers,
+                body,
+            }
+        }
+
+        impl Transport for Host {
+            async fn send(&self, req: Request) -> Result<Response, TransportError> {
+                self.requests
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if req.nsid == "com.atproto.space.listWriters" && !self.writer_pages.is_empty() {
+                    let (repos, cursor) = self
+                        .writer_pages
+                        .get(page_of(&req))
+                        .cloned()
+                        .unwrap_or_default();
+                    let body = json!({ "repos": repos, "cursor": cursor }).to_string();
+                    return Ok(reply(200, vec![], body.into_bytes()));
+                }
+                if req.nsid == "com.atproto.space.listWriters" {
+                    let mut repos = self.extra_writers.clone();
+                    let data = self.writer_data.clone().unwrap_or_else(
+                        || json!({ "$bytes": STANDARD.encode(hash_of(&self.records).digest()) }),
+                    );
+                    repos.push(json!({
+                        "$type": REPO_WRITE, "repo": REPO, "repoRev": self.rev,
+                        "data": data, "spaceRev": "3mbaaaaaaaaz2",
+                    }));
+                    let body = json!({ "repos": repos }).to_string();
+                    return Ok(reply(200, vec![], body.into_bytes()));
+                }
+                if let Some(name) = self.refuse {
+                    let body = json!({ "error": name }).to_string();
+                    return Ok(reply(400, vec![], body.into_bytes()));
+                }
+                match req.nsid {
+                    "com.atproto.space.getRepo" => {
+                        let body = write_repo_archive(
+                            &self.commit(),
+                            self.records.iter().map(|(b, _)| (POST, RKEY, b.as_slice())),
+                        )
+                        .unwrap();
+                        Ok(reply(200, self.mac(&req), body))
+                    }
+                    "com.atproto.space.listRepoOps" => {
+                        let c = self.commit();
+                        let commit = json!({
+                            "ver": 1, "repo": REPO, "space": space().to_string(), "rev": c.rev(),
+                            "data": { "$bytes": STANDARD.encode(c.data()) },
+                        });
+                        let body = match self.ops_pages.get(page_of(&req)) {
+                            Some((ops, cursor)) => {
+                                json!({ "ops": ops, "commit": commit, "cursor": cursor })
+                            }
+                            None if self.ops_pages.is_empty() => {
+                                json!({ "ops": self.ops, "commit": commit })
+                            }
+                            None => json!({ "ops": [], "commit": commit }),
+                        };
+                        Ok(reply(200, self.mac(&req), body.to_string().into_bytes()))
+                    }
+                    _ => Err(TransportError::Refused),
+                }
+            }
+        }
+
+        impl Directory for Host {
+            async fn resolve(&self, _: &str, refresh: bool) -> Result<Identity, ResolveError> {
+                let real = didkey::format_p256(&self.kem.public_key());
+                let kem_key = match (&self.cached_kem, refresh) {
+                    (Some(stale), false) => stale.clone(),
+                    _ => real,
+                };
+                Ok(Identity {
+                    pds: "https://pds.example".into(),
+                    signing_key: None,
+                    kem_key: Some(kem_key),
+                    label_key: None,
+                })
+            }
+        }
+    }
+
+    use fake::*;
+    use serde_json::json;
+
+    fn cred() -> Credential {
+        Credential::for_tests(space())
+    }
+
+    fn holding(rev: &str, records: &[(Vec<u8>, Cid)]) -> SpaceCursor {
+        let mut s = SpaceCursor::default();
+        s.repos
+            .insert(REPO.into(), RepoCursor::new(REPO, rev, &hash_of(records)));
+        s
+    }
+
+    fn op_entry(rev: &str, cid: Option<Cid>, prev: Option<Cid>, value: Option<Value>) -> Value {
+        let mut e = json!({
+            "rev": rev, "collection": POST, "rkey": RKEY,
+            "cid": cid.map(|c| c.to_string()), "prev": prev.map(|c| c.to_string()),
+        });
+        if let Some(v) = value {
+            e["value"] = v;
+        }
+        e
+    }
+
+    #[test]
+    fn op_logs_must_start_from_what_we_hold() {
+        let (_, zb, z) = post("z");
+        let (yv, yb, y) = post("y");
+        let held_z = |_: &str, _: &str| Some(z);
+        let cursor = holding(R1, &[(zb.clone(), z)]).repos[REPO].clone();
+
+        // The host is honestly still at P = Z. Its ops cancel in the set
+        // hash, but would have the caller show P = Y.
+        let mut host = Host::new(R2, vec![(zb.clone(), z)]);
+        host.ops = json!([
+            op_entry(R2, None, Some(y), None),
+            op_entry(R2, Some(y), None, Some(yv.clone())),
+        ]);
+        assert_eq!(
+            block_on(fetch_ops(&host, &host, &cred(), &cursor, &held_z, 0)).unwrap_err(),
+            SyncError::Gap("an op's prev isn't what we hold")
+        );
+        // `sync_space` falls back to the full repo, which says Z.
+        let (_, changes) = block_on(sync_space(
+            &host,
+            &host,
+            &cred(),
+            &holding(R1, &[(zb.clone(), z)]),
+            &|_: &str, _: &str, _: &str| Some(z),
+            0,
+        ))
+        .unwrap();
+        match changes.as_slice() {
+            [RepoChange::Replaced { records, .. }] => assert_eq!(records[0].cid, z),
+            other => panic!("{other:?}"),
+        }
+
+        // The honest update from Z to Y replays.
+        let mut host = Host::new(R2, vec![(yb, y)]);
+        host.ops = json!([op_entry(R2, Some(y), Some(z), Some(yv.clone()))]);
+        let (next, ops) = block_on(fetch_ops(&host, &host, &cred(), &cursor, &held_z, 0)).unwrap();
+        assert_eq!(next.rev, R2);
+        assert_eq!(ops[0].record.as_ref().map(|r| r.cid), Some(y));
+
+        // Ops at or before the cursor, or out of order, are refused.
+        host.ops = json!([op_entry(R1, Some(y), Some(z), Some(yv.clone()))]);
+        assert_eq!(
+            block_on(fetch_ops(&host, &host, &cred(), &cursor, &held_z, 0)).unwrap_err(),
+            SyncError::Gap("ops out of order")
+        );
+        host.ops = json!([
+            op_entry(R3, None, Some(z), None),
+            op_entry(R2, Some(y), None, Some(yv.clone())),
+        ]);
+        assert_eq!(
+            block_on(fetch_ops(&host, &host, &cred(), &cursor, &held_z, 0)).unwrap_err(),
+            SyncError::Gap("ops out of order")
+        );
+
+        // A value on a delete is refused.
+        let mut host = Host::new(R2, vec![]);
+        host.ops = json!([op_entry(R2, None, Some(z), Some(yv))]);
+        assert_eq!(
+            block_on(fetch_ops(&host, &host, &cred(), &cursor, &held_z, 0)).unwrap_err(),
+            SyncError::RecordMismatch
+        );
+    }
+
+    #[test]
+    fn repos_older_than_the_cursor_are_refused() {
+        let (_, zb, z) = post("z");
+        // We're at R3, where the author had deleted Z; the host serves R2,
+        // which still has it.
+        let host = Host::new(R2, vec![(zb, z)]);
+        let cursor = holding(R3, &[]);
+        let (next, changes) = block_on(sync_space(
+            &host,
+            &host,
+            &cred(),
+            &cursor,
+            &|_: &str, _: &str, _: &str| None,
+            0,
+        ))
+        .unwrap();
+        match changes.as_slice() {
+            [RepoChange::Failed { error, .. }] => {
+                assert_eq!(error, &SyncError::Gap("repo is older than its cursor"))
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(next, cursor);
+    }
+
+    #[test]
+    fn stale_kem_keys_are_refreshed_and_bad_values_fall_back() {
+        let (_, zb, z) = post("z");
+        let (_, yb, y) = post("y");
+        let (other, _, _) = post("not y");
+        let mut host = Host::new(R2, vec![(yb, y)]);
+        host.cached_kem = Some(umbrae_core::didkey::format_p256(
+            &p256::SecretKey::random(&mut rand_core::OsRng).public_key(),
+        ));
+        let (cursor, records) = block_on(fetch_repo(&host, &host, &cred(), REPO, 0)).unwrap();
+        assert_eq!((cursor.rev.as_str(), records.len()), (R2, 1));
+
+        // An op value that doesn't hash to its CID: fetch in full instead.
+        host.ops = json!([op_entry(R2, Some(y), Some(z), Some(other))]);
+        let (next, changes) = block_on(sync_space(
+            &host,
+            &host,
+            &cred(),
+            &holding(R1, &[(zb, z)]),
+            &|_: &str, _: &str, _: &str| Some(z),
+            0,
+        ))
+        .unwrap();
+        match changes.as_slice() {
+            [RepoChange::Replaced { records, .. }] => assert_eq!(records[0].cid, y),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(next.repos[REPO].rev, R2);
+    }
+
+    #[test]
+    fn repos_the_host_no_longer_has_are_dropped() {
+        let (_, zb, z) = post("z");
+        let mut host = Host::new(R2, vec![(zb.clone(), z)]);
+        host.refuse = Some("RepoNotFound");
+        let held_z = |_: &str, _: &str, _: &str| Some(z);
+        let (next, changes) = block_on(sync_space(
+            &host,
+            &host,
+            &cred(),
+            &holding(R1, &[(zb.clone(), z)]),
+            &held_z,
+            0,
+        ))
+        .unwrap();
+        assert_eq!(
+            changes,
+            [RepoChange::Replaced {
+                repo: REPO.into(),
+                records: vec![]
+            }]
+        );
+        assert!(next.repos.is_empty());
+        // Nothing held: nothing to drop.
+        let (_, changes) = block_on(sync_space(
+            &host,
+            &host,
+            &cred(),
+            &SpaceCursor::default(),
+            &held_z,
+            0,
+        ))
+        .unwrap();
+        assert!(changes.is_empty());
+        // Other refusals keep what's held, to retry.
+        host.refuse = Some("RepoTakendown");
+        let held = holding(R1, &[(zb, z)]);
+        let (next, changes) =
+            block_on(sync_space(&host, &host, &cred(), &held, &held_z, 0)).unwrap();
+        assert!(matches!(changes.as_slice(), [RepoChange::Failed { .. }]));
+        assert_eq!(next, held);
+    }
+
+    #[test]
+    fn one_writers_bad_digest_doesnt_stop_the_listing() {
+        let (_, zb, z) = post("z");
+        // The writer's own host reported two bytes as its digest; the
+        // authority stores and lists them as given.
+        let mut host = Host::new(R1, vec![(zb.clone(), z)]);
+        host.writer_data = Some(json!({ "$bytes": "AAA=" }));
+        let w = block_on(list_writers(&host, &host, &cred(), 0)).unwrap();
+        assert_eq!(w.active[0].data, None);
+        // Never skipped as unchanged: it's fetched and checked as usual.
+        let held = holding(R1, &[(zb.clone(), z)]);
+        let (next, changes) = block_on(sync_space(
+            &host,
+            &host,
+            &cred(),
+            &held,
+            &|_: &str, _: &str, _: &str| Some(z),
+            0,
+        ))
+        .unwrap();
+        assert!(
+            matches!(changes.as_slice(), [RepoChange::Ops { ops, .. }] if ops.is_empty()),
+            "{changes:?}"
+        );
+        assert_eq!(next, held);
+    }
+
+    #[test]
+    fn op_logs_are_capped_before_the_commit_check() {
+        let (_, zb, z) = post("z");
+        let (_, _, y) = post("y");
+        let mut host = Host::new(R2, vec![(zb.clone(), z)]);
+        let huge = json!({ "$type": POST, "text": "x".repeat(MAX_LOG_BYTES), "createdAt": "2026-11-14T10:00:00Z" });
+        host.ops = json!([op_entry(R2, Some(y), Some(z), Some(huge))]);
+        let cursor = holding(R1, &[(zb, z)]).repos[REPO].clone();
+        assert_eq!(
+            block_on(fetch_ops(
+                &host,
+                &host,
+                &cred(),
+                &cursor,
+                &|_: &str, _: &str| Some(z),
+                0
+            ))
+            .unwrap_err(),
+            SyncError::Gap("op log too long")
+        );
+    }
+
+    #[test]
+    fn broken_or_misfiled_cursors_fetch_in_full() {
+        let (_, zb, z) = post("z");
+        let host = Host::new(R2, vec![(zb.clone(), z)]);
+        let any = |_: &str, _: &str, _: &str| Some(z);
+        // A state that won't decode.
+        let mut broken = holding(R1, &[(zb.clone(), z)]);
+        broken.repos.get_mut(REPO).unwrap().state = "AAAA".into();
+        // A cursor for another repo, filed under this one.
+        let mut misfiled = holding(R1, &[(zb, z)]);
+        misfiled.repos.get_mut(REPO).unwrap().repo = "did:example:carol".into();
+        for cursor in [broken, misfiled] {
+            let (next, changes) =
+                block_on(sync_space(&host, &host, &cred(), &cursor, &any, 0)).unwrap();
+            assert!(
+                matches!(changes.as_slice(), [RepoChange::Replaced { .. }]),
+                "{changes:?}"
+            );
+            assert_eq!(next.repos[REPO].repo, REPO);
+        }
+    }
+
+    #[test]
+    fn listings_follow_every_cursor_and_are_capped() {
+        let entry = |i: usize| {
+            json!({
+                "$type": REPO_WRITE, "repo": format!("did:example:w{i}"), "repoRev": R1,
+                "data": { "$bytes": base64::engine::general_purpose::STANDARD.encode([0u8; 32]) },
+                "spaceRev": R1,
+            })
+        };
+        let mut host = Host::new(R1, vec![]);
+        // A host that pages below the asked limit: every page is read, so
+        // no held writer is mistaken for removed.
+        host.writer_pages = vec![
+            (vec![entry(0)], Some("p1")),
+            (vec![entry(1)], Some("p2")),
+            (vec![entry(2)], None),
+        ];
+        let w = block_on(list_writers(&host, &host, &cred(), 0)).unwrap();
+        assert_eq!(w.active.len(), 3);
+        // A repeated cursor ends the listing.
+        host.writer_pages = vec![(vec![entry(0)], Some("p1")), (vec![entry(1)], Some("p1"))];
+        let w = block_on(list_writers(&host, &host, &cred(), 0)).unwrap();
+        assert_eq!(w.active.len(), 2);
+        // Writers listing huge `data` (16 MiB in all) don't fail the
+        // listing: the bad values are dropped.
+        let big = |i: usize| {
+            let mut e = entry(i);
+            e["data"] = json!({ "$bytes": "A".repeat(1 << 20) });
+            e
+        };
+        host.writer_pages = vec![((0..16).map(big).collect(), None)];
+        let w = block_on(list_writers(&host, &host, &cred(), 0)).unwrap();
+        assert_eq!(w.active.len(), 16);
+        assert!(w.active.iter().all(|w| w.data.is_none()));
+        // A listing past its entry cap is refused.
+        host.writer_pages = vec![(vec![json!({}); MAX_LIST_ENTRIES + 1], None)];
+        assert_eq!(
+            block_on(list_writers(&host, &host, &cred(), 0)).unwrap_err(),
+            SyncError::Malformed("listWriters too long")
+        );
+    }
+
+    #[test]
+    fn op_logs_page_only_after_full_pages() {
+        let (zv, zb, z) = post("z");
+        let none = |_: &str, _: &str| None;
+        let cursor = holding(R1, &[]).repos[REPO].clone();
+        // A full page of creates and deletes, then the create that stays:
+        // replayed across both pages against the last page's commit.
+        let churn = (0..PAGE_LIMIT)
+            .map(|i| match i % 2 {
+                0 => op_entry(R2, Some(z), None, None),
+                _ => op_entry(R2, None, Some(z), None),
+            })
+            .collect();
+        let mut host = Host::new(R2, vec![(zb, z)]);
+        host.ops_pages = vec![
+            (Value::Array(churn), Some("p1")),
+            (json!([op_entry(R2, Some(z), None, Some(zv.clone()))]), None),
+        ];
+        let (next, ops) = block_on(fetch_ops(&host, &host, &cred(), &cursor, &none, 0)).unwrap();
+        assert_eq!((next.rev.as_str(), ops.len()), (R2, PAGE_LIMIT + 1));
+        // A short page's cursor isn't followed: the page after it, which
+        // would delete Z and so miss the commit, is never read.
+        host.ops_pages = vec![
+            (json!([op_entry(R2, Some(z), None, Some(zv))]), Some("p1")),
+            (json!([op_entry(R3, None, Some(z), None)]), None),
+        ];
+        let (_, ops) = block_on(fetch_ops(&host, &host, &cred(), &cursor, &none, 0)).unwrap();
+        assert_eq!(ops.len(), 1);
+    }
+
+    /// A full page of ops that create and delete Z at R2.
+    fn churn(z: Cid) -> Value {
+        (0..PAGE_LIMIT)
+            .map(|i| match i % 2 {
+                0 => op_entry(R2, Some(z), None, None),
+                _ => op_entry(R2, None, Some(z), None),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn one_hostile_log_costs_few_requests() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let (_, _, z) = post("z");
+        let none = |_: &str, _: &str| None;
+        let cursor = holding(R1, &[]).repos[REPO].clone();
+        // Full pages without end: cut off after `MAX_OP_PAGES`.
+        const CURSORS: [&str; 20] = [
+            "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10", "p11", "p12", "p13",
+            "p14", "p15", "p16", "p17", "p18", "p19", "p20",
+        ];
+        let mut host = Host::new(R2, vec![]);
+        host.ops_pages = CURSORS.iter().map(|c| (churn(z), Some(*c))).collect();
+        assert_eq!(
+            block_on(fetch_ops(&host, &host, &cred(), &cursor, &none, 0)).unwrap_err(),
+            SyncError::Gap("op log has too many pages")
+        );
+        assert_eq!(host.requests.load(Relaxed), MAX_OP_PAGES);
+        // A MAC that fails after the first page isn't a stale key: no
+        // replay of the log under a refreshed one.
+        let mut host = Host::new(R2, vec![]);
+        host.ops_pages = vec![(churn(z), Some("p1")), (json!([]), None)];
+        host.bad_mac_from_page = Some(1);
+        assert_eq!(
+            block_on(fetch_ops(&host, &host, &cred(), &cursor, &none, 0)).unwrap_err(),
+            SyncError::Gap("MAC failed partway through the log")
+        );
+        assert_eq!(host.requests.load(Relaxed), 2);
+    }
+
+    #[test]
+    fn unknown_writer_entries_are_skipped() {
+        let mut host = Host::new(R1, vec![]);
+        host.extra_writers = vec![
+            json!({ "$type": "com.atproto.space.defs#repoSomethingNew", "x": 1 }),
+            json!({ "repo": "did:example:carol" }),
+        ];
+        let w = block_on(list_writers(&host, &host, &cred(), 0)).unwrap();
+        assert_eq!(w.active.len(), 1);
+        assert_eq!(w.active[0].repo, REPO);
+        assert!(w.removed.is_empty());
     }
 }

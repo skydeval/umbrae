@@ -7,6 +7,7 @@
 use crate::umbrae_flow::delegation;
 use crate::{Account, Pds, Report};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::io::Read;
 use std::pin::pin;
@@ -16,6 +17,7 @@ use std::time::Duration;
 use umbrae::space::{group_policy, group_space};
 use umbrae::SPACE_TYPE;
 use umbrae_core::drisl::Value as D;
+use umbrae_core::Cid;
 use umbrae_lexicons::{Record, GROUP, GROUP_RKEY, POST};
 use umbrae_sync::notify::{self, Notification, Update};
 use umbrae_sync::{
@@ -181,6 +183,46 @@ fn wait_for(
     None
 }
 
+/// The app's copy of the space, by record: the CID it holds.
+type Store = BTreeMap<(String, String, String), Cid>;
+
+fn apply(store: &mut Store, changes: &[RepoChange]) {
+    for c in changes {
+        match c {
+            RepoChange::Replaced { repo, records } => {
+                store.retain(|k, _| &k.0 != repo);
+                for r in records {
+                    let k = (
+                        repo.clone(),
+                        r.uri.collection().to_owned(),
+                        r.uri.rkey().to_owned(),
+                    );
+                    store.insert(k, r.cid);
+                }
+            }
+            RepoChange::Ops { repo, ops } => {
+                for op in ops {
+                    let k = (repo.clone(), op.collection.clone(), op.rkey.clone());
+                    match op.cid {
+                        Some(cid) => store.insert(k, cid),
+                        None => store.remove(&k),
+                    };
+                }
+            }
+            RepoChange::Removed { repo } => store.retain(|k, _| &k.0 != repo),
+            RepoChange::Failed { .. } => {}
+        }
+    }
+}
+
+fn lookup(store: &Store) -> impl Fn(&str, &str, &str) -> Option<Cid> + Sync + '_ {
+    |repo: &str, collection: &str, rkey: &str| {
+        store
+            .get(&(repo.to_owned(), collection.to_owned(), rkey.to_owned()))
+            .copied()
+    }
+}
+
 fn kinds(records: &[umbrae_sync::SyncedRecord]) -> Vec<&'static str> {
     let mut k: Vec<_> = records
         .iter()
@@ -291,14 +333,17 @@ pub(crate) fn run(
     let cred = cred.map_err(|e| e.to_string())?;
 
     // Full sync from nothing.
+    let mut store = Store::new();
     let (cursor, changes) = block_on(sync_space(
         &transport,
         &directory,
         &cred,
         &SpaceCursor::default(),
+        &lookup(&store),
         now(),
     ))
     .map_err(|e| e.to_string())?;
+    apply(&mut store, &changes);
     let mut seen = Vec::new();
     for c in &changes {
         match c {
@@ -364,8 +409,16 @@ pub(crate) fn run(
     );
 
     // Incremental sync from the restored cursor.
-    let (cursor, changes) = block_on(sync_space(&transport, &directory, &cred, &cursor, now()))
-        .map_err(|e| e.to_string())?;
+    let (cursor, changes) = block_on(sync_space(
+        &transport,
+        &directory,
+        &cred,
+        &cursor,
+        &lookup(&store),
+        now(),
+    ))
+    .map_err(|e| e.to_string())?;
+    apply(&mut store, &changes);
     report.check(
         "sync: an incremental sync replays only Alice's new post from the op log",
         match changes.as_slice() {
@@ -408,27 +461,67 @@ pub(crate) fn run(
         now(),
     ))
     .map_err(|e| e.to_string())?;
-    let (_, changes) = block_on(sync_space(&transport, &directory, &cred, &cursor, now()))
-        .map_err(|e| e.to_string())?;
+    let (_, changes) = block_on(sync_space(
+        &transport,
+        &directory,
+        &cred,
+        &cursor,
+        &lookup(&store),
+        now(),
+    ))
+    .map_err(|e| e.to_string())?;
+    apply(&mut store, &changes);
     let bob_removed = changes
         .iter()
         .any(|c| matches!(c, RepoChange::Removed { repo } if repo == &bob.did));
+    let bob_left = store.keys().filter(|k| k.0 == bob.did).count();
     report.check(
         "sync: after Bob's removal a repoRemoved arrives, and the next sync drops his repo",
-        if removed.is_some() && bob_removed {
+        if removed.is_some() && bob_removed && bob_left == 0 {
             Ok(format!("{} change(s)", changes.len()))
         } else {
             Err(format!(
-                "notified {} dropped {bob_removed}: {changes:?}",
+                "notified {} dropped {bob_removed}, {bob_left} of his records left: {changes:?}",
                 removed.is_some()
             ))
         },
     );
+    let refused_before = inbox.lock().unwrap().refused;
     report.check(
-        "sync: nothing reached our endpoint without our token",
-        match inbox.lock().unwrap().refused {
+        "sync: every call the PDS made to our endpoint carried our token",
+        match refused_before {
             0 => Ok("0 refused".into()),
             n => Err(format!("{n} refused")),
+        },
+    );
+    // A notification with another token, as anyone could send: refused.
+    let forged = ureq::post(&format!(
+        "http://127.0.0.1:2583/xrpc/{}",
+        notify::NOTIFY_NSID
+    ))
+    .send_json(json!({
+        "space": space_str,
+        "token": notify::new_token(),
+        "update": { "$type": "com.atproto.space.notifySpaceUpdate#spaceDeleted" },
+    }));
+    let (refused, kept) = {
+        let ib = inbox.lock().unwrap();
+        let kept = ib
+            .notifications
+            .iter()
+            .any(|n| n.update == Update::SpaceDeleted);
+        (ib.refused, kept)
+    };
+    report.check(
+        "sync: a notification with the wrong token is refused and not recorded",
+        match forged {
+            Err(ureq::Error::Status(400, _)) if refused == refused_before + 1 && !kept => {
+                Ok("400".into())
+            }
+            other => Err(format!(
+                "{:?}, {refused} refused, recorded {kept}",
+                other.map(|r| r.status())
+            )),
         },
     );
     Ok(())

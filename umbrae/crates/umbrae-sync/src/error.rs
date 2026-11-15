@@ -52,13 +52,28 @@ pub enum SyncError {
     Op(OpError),
     /// The op log doesn't reproduce the host's commit: fetch the whole repo.
     DigestMismatch,
+    /// The op log can't be applied to the cursor (out of order, or an op's
+    /// `prev` isn't what we hold), or the repo is older than the cursor.
+    Gap(&'static str),
+    /// A record value doesn't hash to its CID.
+    RecordMismatch,
 }
 
 impl SyncError {
     /// Whether the host said the space doesn't exist (or, equivalently, that
     /// we may not see it).
     pub fn is_space_not_found(&self) -> bool {
-        matches!(self, SyncError::Xrpc { error, .. } if error.as_str() == "SpaceNotFound")
+        self.is_xrpc("SpaceNotFound")
+    }
+
+    /// Whether the host has no repo for the account in this space (never
+    /// written, cleared, or the account is gone).
+    pub fn is_repo_not_found(&self) -> bool {
+        self.is_xrpc("RepoNotFound")
+    }
+
+    fn is_xrpc(&self, name: &str) -> bool {
+        matches!(self, SyncError::Xrpc { error, .. } if error.as_str() == name)
     }
 }
 
@@ -82,6 +97,8 @@ impl fmt::Display for SyncError {
             SyncError::Archive(e) => write!(f, "archive: {e}"),
             SyncError::Op(e) => write!(f, "op log: {e}"),
             SyncError::DigestMismatch => f.write_str("op log doesn't reproduce the commit"),
+            SyncError::Gap(why) => write!(f, "op log gap: {why}"),
+            SyncError::RecordMismatch => f.write_str("record doesn't match its CID"),
         }
     }
 }
