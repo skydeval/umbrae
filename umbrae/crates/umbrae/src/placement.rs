@@ -77,6 +77,20 @@ mod tests {
     }
 
     #[test]
+    fn reposts_and_quotes_follow_a_hidden_subject() {
+        let h = hidden();
+        assert_eq!(&repost_space(&h), h.space());
+        assert_eq!(
+            quote_space(&Target::Hidden(h.clone())).as_ref(),
+            Some(h.space())
+        );
+        // A quote of a public record goes wherever the author picks.
+        let public =
+            Target::parse(&format!("at://{BOB}/app.bsky.feed.post/3mbaaaaaaaaa5")).unwrap();
+        assert_eq!(quote_space(&public), None);
+    }
+
+    #[test]
     fn public_records_never_name_hidden_ones() {
         let quote = |uri: String| {
             let r = BTreeMap::from([("uri".to_string(), Value::Text(uri))]);

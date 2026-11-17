@@ -281,9 +281,24 @@ pub(crate) fn run(
     let r = write(bob, POST, "3mbaaaaaaaab3", &reply)?.ok("reply")?;
     let reply_cid_ok = r.json()["cid"] == json!(cid_of(&reply)?);
     write(bob, LIKE, "3mbaaaaaaaab4", &like)?.ok("like")?;
-    // A repost and a same-group quote, placed by the helpers.
+    // A repost and a same-group quote, written wherever the helpers say.
+    // The URIs checked later are the group's, so a helper that answered
+    // any other space fails the sync and visibility checks below too.
+    let write_in = |into: &SpaceRef,
+                    who: &Account,
+                    collection: &str,
+                    rkey: &str,
+                    record: &Value|
+     -> Result<Resp, String> {
+        pds.post(
+            "com.atproto.space.createRecord",
+            &json!({ "space": into.to_string(), "repo": who.did, "collection": collection, "rkey": rkey, "record": record }),
+            &who.auth(),
+        )
+    };
     let repost_into = repost_space(&post_uri);
-    let quote_into = quote_space(&Target::Hidden(post_uri.clone()));
+    let quote_into = quote_space(&Target::Hidden(post_uri.clone()))
+        .ok_or("quote_space gave no space for a hidden quote")?;
     let repost = json!({ "$type": REPOST, "subject": parent, "createdAt": CREATED });
     let quote = json!({ "$type": POST, "text": "this", "createdAt": CREATED,
         "embed": { "$type": "app.bsky.embed.record", "record": parent } });
@@ -293,19 +308,15 @@ pub(crate) fn run(
     let quote_uri = space
         .record(&bob.did, POST, "3mbaaaaaaaab7")
         .map_err(|e| e.to_string())?;
-    let rp = write(bob, REPOST, "3mbaaaaaaaab6", &repost)?;
-    let qt = write(bob, POST, "3mbaaaaaaaab7", &quote)?;
+    let rp = write_in(&repost_into, bob, REPOST, "3mbaaaaaaaab6", &repost)?;
+    let qt = write_in(&quote_into, bob, POST, "3mbaaaaaaaab7", &quote)?;
     report.check(
         "umbrae: a repost and a quote go into the post's space, and the PDS takes both",
-        if repost_into == space
-            && quote_into.as_ref() == Some(&space)
-            && rp.status == 200
-            && qt.status == 200
-        {
+        if repost_into == space && quote_into == space && rp.status == 200 && qt.status == 200 {
             Ok("same space".into())
         } else {
             Err(format!(
-                "{repost_into} {quote_into:?} repost HTTP {} {}, quote HTTP {} {}",
+                "{repost_into} {quote_into} repost HTTP {} {}, quote HTTP {} {}",
                 rp.status,
                 rp.error_name(),
                 qt.status,

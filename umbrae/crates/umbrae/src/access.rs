@@ -400,6 +400,23 @@ mod tests {
             .record(ALICE, umbrae_lexicons::POST, "3mbaaaaaaaaa2")
             .unwrap();
         assert!(!can_view_repost(Some(ALICE), &rp, &elsewhere, &g, &c));
+        // The repost still shows on its own, but the post it reposts
+        // doesn't: its author left, or the viewer blocks them. Then the
+        // repost hides too.
+        let bobs = post(BOB);
+        let arp = g
+            .space
+            .record(ALICE, umbrae_lexicons::REPOST, "3mbaaaaaaaaa6")
+            .unwrap();
+        assert!(can_view_repost(Some(DAVE), &arp, &bobs, &g, &c));
+        assert!(can_view_record(Some(DAVE), &arp, &left, &c));
+        assert!(!can_view_repost(Some(DAVE), &arp, &bobs, &left, &c));
+        let blocks = Ctx {
+            blocks: BTreeSet::from([(DAVE, BOB)]),
+            ..Ctx::default()
+        };
+        assert!(can_view_record(Some(DAVE), &arp, &g, &blocks));
+        assert!(!can_view_repost(Some(DAVE), &arp, &bobs, &g, &blocks));
     }
 
     #[test]

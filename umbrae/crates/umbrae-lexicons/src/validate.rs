@@ -353,6 +353,7 @@ fn like(m: &Map, space: &SpaceRef) -> Result<Like, Invalid> {
         Target::Hidden(u) if u.space() == space && u.collection() == POST => {}
         _ => return Err(Invalid("a like's subject must be a post in the same space")),
     }
+    only_subject_is_hidden(m)?;
     Ok(Like {
         subject,
         created_at: datetime(m, "createdAt")?,
@@ -369,10 +370,25 @@ fn repost(m: &Map, space: &SpaceRef) -> Result<Repost, Invalid> {
             ))
         }
     }
+    only_subject_is_hidden(m)?;
     Ok(Repost {
         subject,
         created_at: datetime(m, "createdAt")?,
     })
+}
+
+/// Refuse a record that names a hidden record anywhere but `subject.uri`
+/// (in an extra field such as `via`): it would tell the space's members
+/// that a post elsewhere exists, and where.
+fn only_subject_is_hidden(m: &Map) -> Result<(), Invalid> {
+    let mut rest = m.clone();
+    if let Some(Value::Map(subject)) = rest.get_mut("subject") {
+        subject.remove("uri");
+    }
+    if mentions_space_uri(&Value::Map(rest)) {
+        return Err(Invalid("only the subject may name a hidden record"));
+    }
+    Ok(())
 }
 
 fn bookmark(m: &Map) -> Result<Bookmark, Invalid> {
@@ -748,6 +764,26 @@ mod tests {
         };
         assert!(check(POST, BOB, RKEY, &with_media(&same, images.clone())).is_ok());
         assert!(check(POST, BOB, RKEY, &with_media(&other, images.clone())).is_err());
+        // In recordWithMedia too, another hidden URI beside the quoted one
+        // refuses: in the strong ref, or in the record wrapper around it.
+        let mut in_ref = sref(&same);
+        if let Value::Map(m) = &mut in_ref {
+            m.insert("note".into(), t(&other));
+        }
+        for wrapper in [
+            map(&[("record", in_ref)]),
+            map(&[("record", sref(&same)), ("note", t(&other))]),
+        ] {
+            let m = post_with(&[(
+                "embed",
+                Value::Map(map(&[
+                    ("$type", t("app.bsky.embed.recordWithMedia")),
+                    ("record", Value::Map(wrapper)),
+                    ("media", images.clone()),
+                ])),
+            )]);
+            assert!(check(POST, BOB, RKEY, &m).is_err());
+        }
         // Media that names a hidden post, or that is itself a record embed.
         let card = Value::Map(map(&[
             ("$type", t("app.bsky.embed.external")),
@@ -761,9 +797,14 @@ mod tests {
             ),
         ]));
         assert!(check(POST, BOB, RKEY, &with_media(&same, card)).is_err());
+        // The nested record is public, so only the media type check can
+        // refuse it.
         let nested = Value::Map(map(&[
             ("$type", t("app.bsky.embed.record")),
-            ("record", sref(&same)),
+            (
+                "record",
+                sref("at://did:plc:carolcccccccccccccccccccc/app.bsky.feed.post/3mbaaaaaaaaa5"),
+            ),
         ]));
         assert!(check(POST, BOB, RKEY, &with_media(&same, nested)).is_err());
         // A malformed quote refuses.
@@ -772,6 +813,20 @@ mod tests {
             Value::Map(map(&[("$type", t("app.bsky.embed.record"))])),
         )]);
         assert!(check(POST, BOB, RKEY, &bare).is_err());
+        // recordWithMedia without its record, or without its media.
+        for (key, value) in [
+            ("media", images.clone()),
+            ("record", Value::Map(map(&[("record", sref(&same))]))),
+        ] {
+            let half = post_with(&[(
+                "embed",
+                Value::Map(map(&[
+                    ("$type", t("app.bsky.embed.recordWithMedia")),
+                    (key, value),
+                ])),
+            )]);
+            assert!(check(POST, BOB, RKEY, &half).is_err());
+        }
     }
 
     #[test]
@@ -793,6 +848,26 @@ mod tests {
         let like_uri = space(SKEY).record(ALICE, LIKE, RKEY).unwrap().to_string();
         assert!(check(REPOST, BOB, RKEY, &repost(&like_uri)).is_err());
         assert!(check(REPOST, BOB, "self", &repost(&hidden_post_uri(SKEY))).is_err());
+    }
+
+    #[test]
+    fn likes_and_reposts_name_no_other_hidden_record() {
+        let other = hidden_post_uri(OTHER_SKEY);
+        for collection in [LIKE, REPOST] {
+            let mut m = map(&[
+                ("$type", t(collection)),
+                ("subject", sref(&hidden_post_uri(SKEY))),
+                ("createdAt", t(NOW)),
+            ]);
+            assert!(check(collection, BOB, RKEY, &m).is_ok());
+            m.insert("via".into(), sref(&other));
+            assert!(check(collection, BOB, RKEY, &m).is_err());
+            m.remove("via");
+            if let Some(Value::Map(s)) = m.get_mut("subject") {
+                s.insert("note".into(), t(&format!("see {other}")));
+            }
+            assert!(check(collection, BOB, RKEY, &m).is_err());
+        }
     }
 
     #[test]
