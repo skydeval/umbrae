@@ -10,6 +10,7 @@ use umbrae_lexicons::{
 
 /// What a record turned out to be.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Checked {
     /// A valid hidden-post record (post, like or group name).
     Hidden(Record),

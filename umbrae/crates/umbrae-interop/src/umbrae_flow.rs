@@ -12,8 +12,10 @@ use p256::ecdsa::SigningKey;
 use rand_core::OsRng;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use umbrae::access::{can_view_record, can_view_space, can_write, visible_members};
-use umbrae::placement::{leaks_hidden, like_space, reply_space};
+use umbrae::access::{
+    can_view_record, can_view_repost, can_view_space, can_write, visible_members,
+};
+use umbrae::placement::{leaks_hidden, like_space, quote_space, reply_space, repost_space};
 use umbrae::space::{check_policy, group_policy, group_space};
 use umbrae::{SpaceState, Tri, ViewContext, SPACE_TYPE};
 use umbrae_core::cid::Cid;
@@ -23,7 +25,7 @@ use umbrae_core::policy::{MemberAccess, Policy};
 use umbrae_core::repo_archive::{read_repo_archive, ArchivedRecord};
 use umbrae_core::uri::{SpaceRecordUri, SpaceRef};
 use umbrae_core::{didkey, kem};
-use umbrae_lexicons::{validate_record, Record, Target, GROUP, GROUP_RKEY, LIKE, POST};
+use umbrae_lexicons::{validate_record, Record, Target, GROUP, GROUP_RKEY, LIKE, POST, REPOST};
 
 const SKEY: &str = "3mbbbbbbbbbb2";
 const CREATED: &str = "2026-11-13T10:00:00.000Z";
@@ -279,6 +281,38 @@ pub(crate) fn run(
     let r = write(bob, POST, "3mbaaaaaaaab3", &reply)?.ok("reply")?;
     let reply_cid_ok = r.json()["cid"] == json!(cid_of(&reply)?);
     write(bob, LIKE, "3mbaaaaaaaab4", &like)?.ok("like")?;
+    // A repost and a same-group quote, placed by the helpers.
+    let repost_into = repost_space(&post_uri);
+    let quote_into = quote_space(&Target::Hidden(post_uri.clone()));
+    let repost = json!({ "$type": REPOST, "subject": parent, "createdAt": CREATED });
+    let quote = json!({ "$type": POST, "text": "this", "createdAt": CREATED,
+        "embed": { "$type": "app.bsky.embed.record", "record": parent } });
+    let repost_uri = space
+        .record(&bob.did, REPOST, "3mbaaaaaaaab6")
+        .map_err(|e| e.to_string())?;
+    let quote_uri = space
+        .record(&bob.did, POST, "3mbaaaaaaaab7")
+        .map_err(|e| e.to_string())?;
+    let rp = write(bob, REPOST, "3mbaaaaaaaab6", &repost)?;
+    let qt = write(bob, POST, "3mbaaaaaaaab7", &quote)?;
+    report.check(
+        "umbrae: a repost and a quote go into the post's space, and the PDS takes both",
+        if repost_into == space
+            && quote_into.as_ref() == Some(&space)
+            && rp.status == 200
+            && qt.status == 200
+        {
+            Ok("same space".into())
+        } else {
+            Err(format!(
+                "{repost_into} {quote_into:?} repost HTTP {} {}, quote HTTP {} {}",
+                rp.status,
+                rp.error_name(),
+                qt.status,
+                qt.error_name()
+            ))
+        },
+    );
     report.check(
         "umbrae: leaks_hidden refuses a public quote of the hidden post; the reply's CID matches the PDS",
         {
@@ -344,6 +378,12 @@ pub(crate) fn run(
         .iter()
         .map(|(_, v)| match v {
             Ok(Some(Record::Post(p))) if p.reply.is_some() => "reply",
+            Ok(Some(Record::Post(p)))
+                if p.quote.as_ref().and_then(|q| q.target.hidden()) == Some(&post_uri) =>
+            {
+                "quote"
+            }
+            Ok(Some(Record::Repost(r))) if r.subject.target.hidden() == Some(&post_uri) => "repost",
             Ok(Some(Record::Post(_))) => "post",
             Ok(Some(Record::Like(_))) => "like",
             Ok(Some(Record::Group(_))) => "group",
@@ -351,8 +391,13 @@ pub(crate) fn run(
         })
         .collect();
     report.check(
-        "umbrae: every synced record validates (group, post, reply, like)",
-        if bad.is_empty() && records.len() == 4 {
+        "umbrae: every synced record validates (group, post, reply, like, repost, quote)",
+        if bad.is_empty()
+            && records.len() == 6
+            && ["group", "post", "reply", "like", "repost", "quote"]
+                .iter()
+                .all(|k| kinds.contains(k))
+        {
             Ok(kinds.join(", "))
         } else {
             Err(format!("{kinds:?} {bad:?}"))
@@ -377,6 +422,9 @@ pub(crate) fn run(
         !can_view_record(a, &carol_uri, &state, &ctx),
         can_write(&bob.did, &state, &ctx),
         !can_write(&carol.did, &state, &ctx),
+        can_view_repost(a, &repost_uri, &post_uri, &state, &ctx),
+        !can_view_repost(c, &repost_uri, &post_uri, &state, &ctx),
+        can_view_record(a, &quote_uri, &state, &ctx),
     ];
     report.check(
         "umbrae: Alice and Bob see the posts; Carol and signed-out viewers don't",
@@ -433,6 +481,8 @@ pub(crate) fn run(
         if state.members.get(&bob.did).is_none()
             && !can_view_space(b, &state, &ctx)
             && !can_view_record(a, &reply_uri, &state, &ctx)
+            && !can_view_repost(a, &repost_uri, &post_uri, &state, &ctx)
+            && !can_view_record(a, &quote_uri, &state, &ctx)
             && can_view_record(a, &post_uri, &state, &ctx)
         {
             Ok(format!("{} member(s) left", state.members.len()))

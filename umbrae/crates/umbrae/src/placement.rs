@@ -4,7 +4,10 @@
 //!   own repo there, so its audience is exactly the parent's.
 //! - A hidden reply to a public post goes into whichever space the author
 //!   picks, like a new post.
-//! - A like goes into the liked post's space.
+//! - A like or a repost goes into its subject's space.
+//! - A quote of a hidden post goes into that post's space; a quote of a
+//!   public record goes wherever the author picks. A quote that is also a
+//!   reply to a hidden post needs both in the same space.
 //! - A public record never points at a hidden one: a space URI has no
 //!   public meaning, and naming one in public leaks that it exists.
 
@@ -20,6 +23,16 @@ pub fn reply_space(parent: &Target) -> Option<SpaceRef> {
 
 pub fn like_space(subject: &SpaceRecordUri) -> SpaceRef {
     subject.space().clone()
+}
+
+pub fn repost_space(subject: &SpaceRecordUri) -> SpaceRef {
+    subject.space().clone()
+}
+
+/// The space a quote must go into, or `None` when the quoted record is
+/// public and the author chooses.
+pub fn quote_space(quoted: &Target) -> Option<SpaceRef> {
+    quoted.hidden().map(|u| u.space().clone())
 }
 
 /// Whether a record headed for a **public** repo names a hidden record

@@ -388,6 +388,7 @@ pub(crate) fn run(
                 kinds.insert("audience");
                 audiences.push(a);
             }
+            Ok(Some(_)) => bad.push(format!("{} unknown labeler record", r.rkey)),
             Err(e) => bad.push(format!("{} {e}", r.rkey)),
         }
     }

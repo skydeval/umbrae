@@ -187,7 +187,7 @@ pub fn can_view_label(
         Some(LabelSubject::HiddenPost(uri)) => {
             post_space.is_some_and(|s| can_view_record(viewer, &uri, s, ctx))
         }
-        None => false,
+        _ => false,
     }
 }
 

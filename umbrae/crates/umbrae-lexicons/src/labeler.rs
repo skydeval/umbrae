@@ -130,6 +130,7 @@ pub struct LabelerReasons {
 
 /// What a label is on.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LabelSubject {
     /// An account, by DID (from a bare DID or `at://did`).
     Account(String),
@@ -140,6 +141,7 @@ pub enum LabelSubject {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum LabelerRecord {
     Label(Box<Label>),
     Profile(LabelerProfile),

@@ -7,6 +7,7 @@
 //! | `tools.umbrae.post` | a hidden post (the fields of `app.bsky.feed.post`) |
 //! | `tools.umbrae.like` | a like of a hidden post |
 //! | `tools.umbrae.group` | the group's name, written by the authority |
+//! | `tools.umbrae.repost` | a repost of a hidden post, in that post's space |
 //! | `tools.umbrae.bookmark` | a bookmark of a hidden post, in the author's only-me space |
 //! | `tools.umbrae.labeler` | the space type: one private labeler |
 //! | `tools.umbrae.label` | a label (the fields of `com.atproto.label.defs#label`) |
@@ -29,8 +30,8 @@ pub use labeler::{
     ReasonGroup, ReasonStrings, RetiredKey,
 };
 pub use validate::{
-    validate_record, Bookmark, Group, Invalid, Like, Post, PublicUri, Record, Reply, StrongRef,
-    Target,
+    validate_record, Bookmark, Group, Invalid, Like, Post, PublicUri, Record, Reply, Repost,
+    StrongRef, Target,
 };
 
 pub const SPACE_TYPE: &str = "tools.umbrae.space";
@@ -38,6 +39,7 @@ pub const POST: &str = "tools.umbrae.post";
 pub const LIKE: &str = "tools.umbrae.like";
 pub const GROUP: &str = "tools.umbrae.group";
 pub const BOOKMARK: &str = "tools.umbrae.bookmark";
+pub const REPOST: &str = "tools.umbrae.repost";
 /// The record key for singletons, and the labeler space's key.
 pub const SELF_RKEY: &str = "self";
 /// The group record's only record key.
@@ -59,6 +61,7 @@ pub const LEXICONS: &[(&str, &str)] = &[
     (POST, include_str!("../lexicons/tools/umbrae/post.json")),
     (LIKE, include_str!("../lexicons/tools/umbrae/like.json")),
     (GROUP, include_str!("../lexicons/tools/umbrae/group.json")),
+    (REPOST, include_str!("../lexicons/tools/umbrae/repost.json")),
     (
         BOOKMARK,
         include_str!("../lexicons/tools/umbrae/bookmark.json"),
@@ -120,7 +123,7 @@ mod tests {
             .iter()
             .map(|c| c.as_str().unwrap())
             .collect();
-        assert_eq!(cols, [POST, LIKE, GROUP, BOOKMARK]);
+        assert_eq!(cols, [POST, LIKE, GROUP, BOOKMARK, REPOST]);
     }
 
     #[test]

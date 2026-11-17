@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A hidden post. Written only into a tools.umbrae.space space, never into a public repo. Same fields as app.bsky.feed.post. A reply to a hidden post lives in that post's space; quotes of hidden posts are not supported.",
+      "description": "A hidden post. Written only into a tools.umbrae.space space, never into a public repo. Same fields as app.bsky.feed.post. A reply to a hidden post lives in that post's space; a quote may name a public record or a hidden post in the quoting post's own space.",
       "key": "tid",
       "record": {
         "type": "object",

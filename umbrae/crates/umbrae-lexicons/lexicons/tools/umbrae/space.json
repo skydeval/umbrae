@@ -11,7 +11,8 @@
         "tools.umbrae.post",
         "tools.umbrae.like",
         "tools.umbrae.group",
-        "tools.umbrae.bookmark"
+        "tools.umbrae.bookmark",
+        "tools.umbrae.repost"
       ]
     }
   }

@@ -29,6 +29,7 @@ impl XrpcName {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum SyncError {
     Transport(TransportError),
     Resolve(ResolveError),

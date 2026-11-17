@@ -76,6 +76,7 @@ impl Confirmation {
 /// reads the writer set and each repo from their hosts and checks them.
 /// `repo` and the revisions only hint at what changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Update {
     /// A repo advanced, by the sender's account.
     RepoWrite {

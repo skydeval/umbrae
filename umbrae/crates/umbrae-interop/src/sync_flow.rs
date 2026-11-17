@@ -212,6 +212,7 @@ fn apply(store: &mut Store, changes: &[RepoChange]) {
             }
             RepoChange::Removed { repo } => store.retain(|k, _| &k.0 != repo),
             RepoChange::Failed { .. } => {}
+            other => panic!("unhandled repo change {other:?}"),
         }
     }
 }

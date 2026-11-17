@@ -203,6 +203,21 @@ pub fn can_view_bookmark(
         && subject_space.is_some_and(|s| can_view_record(viewer, subject, s, ctx))
 }
 
+/// Whether `viewer` may see a repost: it and the post it reposts are in
+/// the same space (`state`), and they may see both. A repost naming a post
+/// in any other space never shows.
+pub fn can_view_repost(
+    viewer: Option<&str>,
+    repost: &SpaceRecordUri,
+    subject: &SpaceRecordUri,
+    state: &SpaceState,
+    ctx: &impl ViewContext,
+) -> bool {
+    repost.space() == subject.space()
+        && can_view_record(viewer, repost, state, ctx)
+        && can_view_record(viewer, subject, state, ctx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +374,32 @@ mod tests {
             Some(&g),
             &c
         ));
+    }
+
+    #[test]
+    fn reposts_follow_both_records() {
+        let c = Ctx::default();
+        let g = group();
+        let p = post(ALICE);
+        let rp = g
+            .space
+            .record(BOB, umbrae_lexicons::REPOST, "3mbaaaaaaaaa5")
+            .unwrap();
+        assert!(can_view_repost(Some(DAVE), &rp, &p, &g, &c));
+        let stranger = "did:plc:strangerssssssssssssssssss";
+        assert!(!can_view_repost(Some(stranger), &rp, &p, &g, &c));
+        assert!(!can_view_repost(None, &rp, &p, &g, &c));
+        // Once the reposter leaves, their repost drops out.
+        let mut left = group();
+        left.members = Members::default();
+        left.members.insert(DAVE, rw(true, false));
+        assert!(!can_view_repost(Some(DAVE), &rp, &p, &left, &c));
+        // A repost whose subject is in another space never shows.
+        let elsewhere = crate::space::group_space(ALICE, "3mbbbbbbbbbb3")
+            .unwrap()
+            .record(ALICE, umbrae_lexicons::POST, "3mbaaaaaaaaa2")
+            .unwrap();
+        assert!(!can_view_repost(Some(ALICE), &rp, &elsewhere, &g, &c));
     }
 
     #[test]

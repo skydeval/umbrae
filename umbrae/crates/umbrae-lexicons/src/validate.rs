@@ -5,14 +5,16 @@
 //! - a hidden reply parent or root must be in the reply's own space;
 //! - a public parent needs a public root (a public post can't reply to a
 //!   hidden one);
-//! - a like's subject is a hidden post in the like's own space;
-//! - an embed never points at a hidden record (no hidden quotes);
+//! - a like's or repost's subject is a hidden post in its own space;
+//! - a record embed (a quote) names a public record or a hidden post in
+//!   the quoting post's own space; nothing else in an embed points at a
+//!   hidden record;
 //! - a group record is the authority's own, at rkey `self`;
 //! - a bookmark is the authority's own, in the only-me space (key `self`),
 //!   and its subject is a hidden post (in any Umbrae space). Show it only
 //!   while its owner may still see that post.
 
-use crate::{BOOKMARK, GROUP, GROUP_RKEY, LIKE, POST, SPACE_TYPE};
+use crate::{BOOKMARK, GROUP, GROUP_RKEY, LIKE, POST, REPOST, SPACE_TYPE};
 use std::collections::BTreeMap;
 use std::fmt;
 use umbrae_core::cid::Cid;
@@ -121,6 +123,10 @@ pub struct Post {
     pub reply: Option<Reply>,
     pub langs: Vec<String>,
     pub has_embed: bool,
+    /// The quoted record, for `app.bsky.embed.record` and
+    /// `app.bsky.embed.recordWithMedia`. A hidden one is always a post in
+    /// this post's own space.
+    pub quote: Option<StrongRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +142,13 @@ pub struct Group {
     pub created_at: String,
 }
 
+/// A repost of a hidden post, in that post's own space.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Repost {
+    pub subject: StrongRef,
+    pub created_at: String,
+}
+
 /// A bookmark of a hidden post, kept in the author's only-me space.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bookmark {
@@ -143,12 +156,15 @@ pub struct Bookmark {
     pub created_at: String,
 }
 
+/// New record types may be added in a compatible release.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Record {
     Post(Box<Post>),
     Like(Like),
     Group(Group),
     Bookmark(Bookmark),
+    Repost(Repost),
 }
 
 const EMBEDS: &[&str] = &[
@@ -170,7 +186,7 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
         return Err(Invalid("not a tools.umbrae.space space"));
     }
     let collection = uri.collection();
-    if ![POST, LIKE, GROUP, BOOKMARK].contains(&collection) {
+    if ![POST, LIKE, GROUP, BOOKMARK, REPOST].contains(&collection) {
         return Ok(None);
     }
     match value.get("$type") {
@@ -185,6 +201,10 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
         LIKE => {
             tid_key(uri)?;
             Record::Like(like(value, space)?)
+        }
+        REPOST => {
+            tid_key(uri)?;
+            Record::Repost(repost(value, space)?)
         }
         BOOKMARK => {
             tid_key(uri)?;
@@ -243,18 +263,9 @@ fn post(m: &Map, space: &SpaceRef) -> Result<Post, Invalid> {
         }
         Some(_) => return Err(Invalid("reply must be an object")),
     };
-    let has_embed = match m.get("embed") {
-        None => false,
-        Some(Value::Map(e)) => {
-            match e.get("$type") {
-                Some(Value::Text(t)) if EMBEDS.contains(&t.as_str()) => {}
-                _ => return Err(Invalid("unsupported embed type")),
-            }
-            if mentions_space_uri(&Value::Map(e.clone())) {
-                return Err(Invalid("an embed can't point at a hidden record"));
-            }
-            true
-        }
+    let (has_embed, quote) = match m.get("embed") {
+        None => (false, None),
+        Some(Value::Map(e)) => (true, embed(e, space)?),
         Some(_) => return Err(Invalid("embed must be an object")),
     };
     let langs = match m.get("langs") {
@@ -274,7 +285,66 @@ fn post(m: &Map, space: &SpaceRef) -> Result<Post, Invalid> {
         reply,
         langs,
         has_embed,
+        quote,
     })
+}
+
+const MEDIA: &[&str] = &[
+    "app.bsky.embed.images",
+    "app.bsky.embed.video",
+    "app.bsky.embed.external",
+];
+
+/// Check an embed and return the record it quotes, if any. The quoted
+/// strong ref's `uri` is the only place in an embed that may name a hidden
+/// record, and then only a post in `space`.
+fn embed(e: &Map, space: &SpaceRef) -> Result<Option<StrongRef>, Invalid> {
+    let ty = match e.get("$type") {
+        Some(Value::Text(t)) if EMBEDS.contains(&t.as_str()) => t.as_str(),
+        _ => return Err(Invalid("unsupported embed type")),
+    };
+    let mut rest = e.clone();
+    let quoted = match ty {
+        "app.bsky.embed.record" => Some(take_ref(&mut rest)?),
+        "app.bsky.embed.recordWithMedia" => {
+            let mut inner = match rest.remove("record") {
+                Some(Value::Map(r)) => r,
+                _ => return Err(Invalid("recordWithMedia needs a record object")),
+            };
+            let quoted = take_ref(&mut inner)?;
+            match rest.get("media") {
+                Some(Value::Map(media)) => match media.get("$type") {
+                    Some(Value::Text(t)) if MEDIA.contains(&t.as_str()) => {}
+                    _ => return Err(Invalid("unsupported media embed type")),
+                },
+                _ => return Err(Invalid("recordWithMedia needs a media object")),
+            }
+            rest.insert("record".to_owned(), Value::Map(inner));
+            Some(quoted)
+        }
+        _ => None,
+    };
+    if mentions_space_uri(&Value::Map(rest)) {
+        return Err(Invalid("an embed can't point at a hidden record"));
+    }
+    if let Some(q) = &quoted {
+        if let Target::Hidden(u) = &q.target {
+            if u.space() != space || u.collection() != POST {
+                return Err(Invalid("a quoted hidden post must be in the same space"));
+            }
+        }
+    }
+    Ok(quoted)
+}
+
+/// Parse `m.record` as a strong ref and remove its `uri` from `m`, so the
+/// rest can be checked for hidden URIs.
+fn take_ref(m: &mut Map) -> Result<StrongRef, Invalid> {
+    let r = strong_ref(m.get("record"))?;
+    if let Some(Value::Map(inner)) = m.get_mut("record") {
+        inner.remove("uri");
+    }
+    Ok(r)
 }
 
 fn like(m: &Map, space: &SpaceRef) -> Result<Like, Invalid> {
@@ -284,6 +354,22 @@ fn like(m: &Map, space: &SpaceRef) -> Result<Like, Invalid> {
         _ => return Err(Invalid("a like's subject must be a post in the same space")),
     }
     Ok(Like {
+        subject,
+        created_at: datetime(m, "createdAt")?,
+    })
+}
+
+fn repost(m: &Map, space: &SpaceRef) -> Result<Repost, Invalid> {
+    let subject = strong_ref(m.get("subject"))?;
+    match &subject.target {
+        Target::Hidden(u) if u.space() == space && u.collection() == POST => {}
+        _ => {
+            return Err(Invalid(
+                "a repost's subject must be a post in the same space",
+            ))
+        }
+    }
+    Ok(Repost {
         subject,
         created_at: datetime(m, "createdAt")?,
     })
@@ -582,7 +668,10 @@ mod tests {
         };
         let public = "at://did:plc:carolcccccccccccccccccccc/app.bsky.feed.post/3mbaaaaaaaaa5";
         assert!(check(POST, BOB, RKEY, &quote(public)).is_ok());
-        assert!(check(POST, BOB, RKEY, &quote(&hidden_post_uri(SKEY))).is_err());
+        // Quoting a post in another group, or a hidden non-post, refuses.
+        assert!(check(POST, BOB, RKEY, &quote(&hidden_post_uri(OTHER_SKEY))).is_err());
+        let like_uri = space(SKEY).record(ALICE, LIKE, RKEY).unwrap().to_string();
+        assert!(check(POST, BOB, RKEY, &quote(&like_uri)).is_err());
         // A link card whose URL carries another group's hidden post.
         let card = post_with(&[(
             "embed",
@@ -607,6 +696,103 @@ mod tests {
         assert!(check(POST, BOB, RKEY, &card).is_err());
         let odd = post_with(&[("embed", Value::Map(map(&[("$type", t("app.example.x"))])))]);
         assert!(check(POST, BOB, RKEY, &odd).is_err());
+    }
+
+    #[test]
+    fn quotes_stay_in_their_space() {
+        let same = hidden_post_uri(SKEY);
+        let other = hidden_post_uri(OTHER_SKEY);
+        let record = |u: &str| {
+            post_with(&[(
+                "embed",
+                Value::Map(map(&[
+                    ("$type", t("app.bsky.embed.record")),
+                    ("record", sref(u)),
+                ])),
+            )])
+        };
+        match check(POST, BOB, RKEY, &record(&same)).unwrap().unwrap() {
+            Record::Post(p) => {
+                assert_eq!(p.quote.unwrap().target.hidden().unwrap().to_string(), same)
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(check(POST, BOB, RKEY, &record(&other)).is_err());
+        // The quoted post's own URI is the only slot that may name it:
+        // another hidden URI elsewhere in the strong ref still refuses.
+        let mut sneaky = sref(&same);
+        if let Value::Map(m) = &mut sneaky {
+            m.insert("note".into(), t(&other));
+        }
+        let sneaky = post_with(&[(
+            "embed",
+            Value::Map(map(&[
+                ("$type", t("app.bsky.embed.record")),
+                ("record", sneaky),
+            ])),
+        )]);
+        assert!(check(POST, BOB, RKEY, &sneaky).is_err());
+        let images = Value::Map(map(&[
+            ("$type", t("app.bsky.embed.images")),
+            ("images", Value::Array(vec![])),
+        ]));
+        let with_media = |u: &str, media: Value| {
+            post_with(&[(
+                "embed",
+                Value::Map(map(&[
+                    ("$type", t("app.bsky.embed.recordWithMedia")),
+                    ("record", Value::Map(map(&[("record", sref(u))]))),
+                    ("media", media),
+                ])),
+            )])
+        };
+        assert!(check(POST, BOB, RKEY, &with_media(&same, images.clone())).is_ok());
+        assert!(check(POST, BOB, RKEY, &with_media(&other, images.clone())).is_err());
+        // Media that names a hidden post, or that is itself a record embed.
+        let card = Value::Map(map(&[
+            ("$type", t("app.bsky.embed.external")),
+            (
+                "external",
+                Value::Map(map(&[
+                    ("uri", t(&other)),
+                    ("title", t("")),
+                    ("description", t("")),
+                ])),
+            ),
+        ]));
+        assert!(check(POST, BOB, RKEY, &with_media(&same, card)).is_err());
+        let nested = Value::Map(map(&[
+            ("$type", t("app.bsky.embed.record")),
+            ("record", sref(&same)),
+        ]));
+        assert!(check(POST, BOB, RKEY, &with_media(&same, nested)).is_err());
+        // A malformed quote refuses.
+        let bare = post_with(&[(
+            "embed",
+            Value::Map(map(&[("$type", t("app.bsky.embed.record"))])),
+        )]);
+        assert!(check(POST, BOB, RKEY, &bare).is_err());
+    }
+
+    #[test]
+    fn reposts() {
+        let repost = |u: &str| {
+            map(&[
+                ("$type", t(REPOST)),
+                ("subject", sref(u)),
+                ("createdAt", t(NOW)),
+            ])
+        };
+        assert!(matches!(
+            check(REPOST, BOB, RKEY, &repost(&hidden_post_uri(SKEY))),
+            Ok(Some(Record::Repost(_)))
+        ));
+        assert!(check(REPOST, BOB, RKEY, &repost(&hidden_post_uri(OTHER_SKEY))).is_err());
+        let public = "at://did:plc:carolcccccccccccccccccccc/app.bsky.feed.post/3mbaaaaaaaaa5";
+        assert!(check(REPOST, BOB, RKEY, &repost(public)).is_err());
+        let like_uri = space(SKEY).record(ALICE, LIKE, RKEY).unwrap().to_string();
+        assert!(check(REPOST, BOB, RKEY, &repost(&like_uri)).is_err());
+        assert!(check(REPOST, BOB, "self", &repost(&hidden_post_uri(SKEY))).is_err());
     }
 
     #[test]

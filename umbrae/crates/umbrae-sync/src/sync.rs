@@ -144,6 +144,7 @@ pub struct SpaceCursor {
 
 /// What changed in one repo since the cursor.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum RepoChange {
     /// The whole repo, fetched fresh: replace whatever was held for it. No
     /// records when its host no longer has the repo.
