@@ -92,6 +92,7 @@ pub fn check_list_policy(space: &SpaceRef, policy: &Policy) -> Result<(), Miscon
     match policy {
         Policy::Member(p) if p.public_read => Err(Misconfigured::PublicRead),
         Policy::Member(p) if p.public_write => Err(Misconfigured::PublicWrite),
+        Policy::Member(p) if !p.publish_policy => Err(Misconfigured::Unpublished),
         Policy::Member(p) if !p.publish_members && is_valid_tid(space.skey()) => Ok(()),
         _ => Err(Misconfigured::WrongPolicy),
     }
@@ -161,6 +162,27 @@ mod tests {
             m.public_read = true;
         }
         assert_eq!(check_list_policy(&l, &open), Err(Misconfigured::PublicRead));
+        let mut unpublished = list_policy(None);
+        if let Policy::Member(m) = &mut unpublished {
+            m.publish_policy = false;
+        }
+        assert_eq!(
+            check_list_policy(&l, &unpublished),
+            Err(Misconfigured::Unpublished)
+        );
+        let mut writable = list_policy(None);
+        if let Policy::Member(m) = &mut writable {
+            m.public_write = true;
+        }
+        assert_eq!(
+            check_list_policy(&l, &writable),
+            Err(Misconfigured::PublicWrite)
+        );
+        let at_self = SpaceRef::new(ALICE, LIST_SPACE_TYPE, "self").unwrap();
+        assert_eq!(
+            check_list_policy(&at_self, &p),
+            Err(Misconfigured::WrongPolicy)
+        );
         let g = group_space(ALICE, SKEY).unwrap();
         assert_eq!(check_list_policy(&g, &p), Err(Misconfigured::NotUmbrae));
         // And a list space is never a group.

@@ -366,8 +366,18 @@ mod tests {
             ),
             Ok(None)
         );
-        // Not a list space.
+        // Not a list space, or a list space at a non-TID key.
         assert!(validate_list_record(&only_me(ALICE, LIST, RKEY), &a_list("mute")).is_err());
+        let at_self = SpaceRef::new(ALICE, LIST_SPACE_TYPE, SELF_RKEY)
+            .unwrap()
+            .record(ALICE, LIST, SELF_RKEY)
+            .unwrap();
+        assert!(validate_list_record(&at_self, &a_list("mute")).is_err());
+        // Items need a TID key, and $type must match the collection.
+        assert!(validate_list_record(&shared(ALICE, LISTITEM, SELF_RKEY), &item(None)).is_err());
+        let mut wrong_type = item(None);
+        wrong_type.insert("$type".into(), t(LIST));
+        assert!(validate_list_record(&shared(ALICE, LISTITEM, RKEY), &wrong_type).is_err());
     }
 
     #[test]
@@ -434,7 +444,40 @@ mod tests {
             .record(ALICE, LIST, "self")
             .unwrap()
             .to_string();
-        for bad in [public_post, &bobs_only_me, &a_post, &not_self, &not_owners] {
+        // Each of these breaks exactly one rule of a personal or shared ref.
+        let by_bob = SpaceRef::new(ALICE, SPACE_TYPE, SELF_RKEY)
+            .unwrap()
+            .record(BOB, LIST, RKEY)
+            .unwrap()
+            .to_string();
+        let in_bobs = SpaceRef::new(BOB, SPACE_TYPE, SELF_RKEY)
+            .unwrap()
+            .record(ALICE, LIST, RKEY)
+            .unwrap()
+            .to_string();
+        let in_group = SpaceRef::new(ALICE, SPACE_TYPE, SKEY)
+            .unwrap()
+            .record(ALICE, LIST, RKEY)
+            .unwrap()
+            .to_string();
+        let own_at_self = only_me(ALICE, LIST, SELF_RKEY).to_string();
+        let shared_at_self = SpaceRef::new(BOB, LIST_SPACE_TYPE, SELF_RKEY)
+            .unwrap()
+            .record(BOB, LIST, SELF_RKEY)
+            .unwrap()
+            .to_string();
+        for bad in [
+            public_post,
+            &bobs_only_me,
+            &a_post,
+            &not_self,
+            &not_owners,
+            &by_bob,
+            &in_bobs,
+            &in_group,
+            &own_at_self,
+            &shared_at_self,
+        ] {
             assert!(
                 validate_record(&at, &exempt(list_kind(bad))).is_err(),
                 "{bad}"
