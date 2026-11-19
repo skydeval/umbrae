@@ -748,6 +748,7 @@ fn run(pds: &Pds, dir: &plc::Directory, report: &mut Report) -> Result<(), Strin
     );
 
     umbrae_flow::run(pds, dir, report, &alice, &bob, &carol)?;
+    umbrae_flow::lists(pds, dir, report, &alice, &bob, &carol)?;
     labeler_flow::run(pds, dir, report, &carol)?;
     sync_flow::run(pds, dir, report, &alice, &bob)
 }

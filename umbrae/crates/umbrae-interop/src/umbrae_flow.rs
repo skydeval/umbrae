@@ -16,7 +16,9 @@ use umbrae::access::{
     can_view_record, can_view_repost, can_view_space, can_write, visible_members,
 };
 use umbrae::placement::{leaks_hidden, like_space, quote_space, reply_space, repost_space};
-use umbrae::space::{check_policy, group_policy, group_space};
+use umbrae::space::{
+    check_list_policy, check_policy, group_policy, group_space, list_policy, list_space, subscriber,
+};
 use umbrae::{SpaceState, Tri, ViewContext, SPACE_TYPE};
 use umbrae_core::cid::Cid;
 use umbrae_core::drisl::{self, Value as D};
@@ -25,7 +27,10 @@ use umbrae_core::policy::{MemberAccess, Policy};
 use umbrae_core::repo_archive::{read_repo_archive, ArchivedRecord};
 use umbrae_core::uri::{SpaceRecordUri, SpaceRef};
 use umbrae_core::{didkey, kem};
-use umbrae_lexicons::{validate_record, Record, Target, GROUP, GROUP_RKEY, LIKE, POST, REPOST};
+use umbrae_lexicons::{
+    validate_list_record, validate_record, ListRecord, Record, Target, GROUP, GROUP_RKEY, LIKE,
+    LIST, LISTITEM, LIST_SPACE_TYPE, POST, REPOST, SELF_RKEY,
+};
 
 const SKEY: &str = "3mbbbbbbbbbb2";
 const CREATED: &str = "2026-11-13T10:00:00.000Z";
@@ -500,6 +505,130 @@ pub(crate) fn run(
         } else {
             Err(format!("{state:?}"))
         },
+    );
+    Ok(())
+}
+
+/// A shared list: Alice owns it, Bob subscribes read-only, Carol is out.
+pub(crate) fn lists(
+    pds: &Pds,
+    dir: &crate::plc::Directory,
+    report: &mut Report,
+    alice: &Account,
+    bob: &Account,
+    carol: &Account,
+) -> Result<(), String> {
+    const LIST_SKEY: &str = "3mbbbbbbbbbc2";
+    let space = list_space(&alice.did, LIST_SKEY).map_err(|e| e.to_string())?;
+    let space_str = space.to_string();
+    let wanted = list_policy(None);
+    let mut policy_json = json!({ "$type": "com.atproto.memberspace.policy" });
+    for (k, v) in wanted.to_map() {
+        if let D::Bool(b) = v {
+            policy_json[k] = json!(b);
+        }
+    }
+    pds.post(
+        "com.atproto.space.createSpace",
+        &json!({ "spaceType": LIST_SPACE_TYPE, "skey": LIST_SKEY, "policy": policy_json }),
+        &alice.auth(),
+    )?
+    .ok("createSpace list")?;
+    let got = pds
+        .get(
+            "com.atproto.space.getSpace",
+            &[("space", &space_str)],
+            &alice.auth(),
+        )?
+        .ok("getSpace list")?
+        .json();
+    let stored = map(&got["policy"]).and_then(|m| Policy::from_map(&m).map_err(|e| e.to_string()));
+    report.check(
+        "lists: the PDS stores the shared-list policy (members unpublished), and it passes check_list_policy",
+        match stored {
+            Ok(p) if p == wanted && check_list_policy(&space, &p).is_ok() => Ok(space_str.clone()),
+            Ok(p) => Err(format!("{p:?}")),
+            Err(e) => Err(e),
+        },
+    );
+    let write = |who: &Account, collection: &str, rkey: &str, record: &Value| {
+        pds.post(
+            "com.atproto.space.createRecord",
+            &json!({ "space": space_str, "repo": who.did, "collection": collection, "rkey": rkey, "record": record }),
+            &who.auth(),
+        )
+    };
+    let list = json!({ "$type": LIST, "purpose": "mute", "name": "noisy", "createdAt": CREATED });
+    write(alice, LIST, SELF_RKEY, &list)?.ok("list record")?;
+    let entry = json!({ "$type": LISTITEM, "subject": carol.did, "createdAt": CREATED });
+    write(alice, LISTITEM, "3mbaaaaaaaac2", &entry)?.ok("list item")?;
+    let s = subscriber();
+    pds.post(
+        "com.atproto.memberspace.putMembers",
+        &json!({ "space": space_str, "members": [{ "did": bob.did, "read": s.read, "write": s.write }] }),
+        &alice.auth(),
+    )?
+    .ok("putMembers list")?;
+    // A subscriber's own PDS takes a write into their repo; the list's
+    // owner never counts it.
+    let bob_entry = json!({ "$type": LISTITEM, "subject": alice.did, "createdAt": CREATED });
+    let bob_write = write(bob, LISTITEM, "3mbaaaaaaaac3", &bob_entry)?;
+    // Bob reads it: only Alice writes, her records validate, and no member
+    // records are published.
+    let synced = sync(pds, dir, &space, bob, None)?;
+    let empty = Vec::new();
+    let records = synced.repos.get(&alice.did).unwrap_or(&empty);
+    let mut kinds = Vec::new();
+    let mut bad = Vec::new();
+    let mut members = 0;
+    for r in records {
+        if r.collection == "com.atproto.memberspace.member" {
+            members += 1;
+            continue;
+        }
+        let uri = space
+            .record(&alice.did, &r.collection, &r.rkey)
+            .map_err(|e| e.to_string())?;
+        match validate_list_record(&uri, &r.value) {
+            Ok(Some(ListRecord::List(l))) if l.name == "noisy" => kinds.push("list"),
+            Ok(Some(ListRecord::Item(i))) if i.subject == carol.did => kinds.push("item"),
+            Ok(None) => {}
+            other => bad.push(format!("{} {other:?}", r.rkey)),
+        }
+    }
+    kinds.sort();
+    report.check(
+        "lists: a subscriber reads the list and its entry; their own write isn't tracked, and no member list is published",
+        if bob_write.status != 200 {
+            Err(format!(
+                "bob's write was refused (HTTP {} {}), so the writer set proves nothing",
+                bob_write.status,
+                bob_write.error_name()
+            ))
+        } else if synced.writers == [alice.did.clone()]
+            && kinds == ["item", "list"]
+            && bad.is_empty()
+            && members == 0
+        {
+            Ok("1 list, 1 item, 0 member records".into())
+        } else {
+            Err(format!(
+                "writers {:?} kinds {kinds:?} bad {bad:?} members {members}",
+                synced.writers
+            ))
+        },
+    );
+    // Carol, not subscribed, gets nothing.
+    let token = delegation(pds, &space_str, carol)?;
+    let key = SigningKey::random(&mut OsRng);
+    let r = pds.post(
+        "com.atproto.space.authorizeSpaceSync",
+        &json!({ "space": space_str, "credentialKey": didkey::format_p256(&key.verifying_key().into()), "delegationToken": token }),
+        &vec![],
+    )?;
+    report.check(
+        "lists: a non-subscriber gets no credential for the list",
+        expect_refusal(&r, Some("SpaceNotFound")),
     );
     Ok(())
 }

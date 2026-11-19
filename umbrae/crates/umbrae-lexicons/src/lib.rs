@@ -9,6 +9,10 @@
 //! | `tools.umbrae.group` | the group's name, written by the authority |
 //! | `tools.umbrae.repost` | a repost of a hidden post, in that post's space |
 //! | `tools.umbrae.bookmark` | a bookmark of a hidden post, in the author's only-me space |
+//! | `tools.umbrae.list` | a hidden list (block, mute or curate) |
+//! | `tools.umbrae.listitem` | one account on a hidden list |
+//! | `tools.umbrae.exemption` | don't apply a label, labeler or list to one account |
+//! | `tools.umbrae.listSpace` | the space type: one shared list |
 //! | `tools.umbrae.labeler` | the space type: one private labeler |
 //! | `tools.umbrae.label` | a label (the fields of `com.atproto.label.defs#label`) |
 //! | `tools.umbrae.labelerProfile` | the labeler's name, description and images |
@@ -22,12 +26,17 @@
 //! from views; it is never an error for the space as a whole.
 
 mod labeler;
+mod list;
 mod validate;
 
 pub use labeler::{
     is_public_subject, label_subject, validate_labeler_record, BlobRef, Label, LabelSubject,
     LabelerAudience, LabelerPolicies, LabelerProfile, LabelerReasons, LabelerRecord, Reason,
     ReasonGroup, ReasonStrings, RetiredKey,
+};
+pub use list::{
+    validate_list_record, Exemption, ExemptionKind, List, ListItem, ListRecord, ListRef, Purpose,
+    EXEMPTION_LABEL, EXEMPTION_LABELER, EXEMPTION_LIST,
 };
 pub use validate::{
     validate_record, Bookmark, Group, Invalid, Like, Post, PublicUri, Record, Reply, Repost,
@@ -40,6 +49,11 @@ pub const LIKE: &str = "tools.umbrae.like";
 pub const GROUP: &str = "tools.umbrae.group";
 pub const BOOKMARK: &str = "tools.umbrae.bookmark";
 pub const REPOST: &str = "tools.umbrae.repost";
+pub const LIST: &str = "tools.umbrae.list";
+pub const LISTITEM: &str = "tools.umbrae.listitem";
+pub const EXEMPTION: &str = "tools.umbrae.exemption";
+/// The space type of a shared list.
+pub const LIST_SPACE_TYPE: &str = "tools.umbrae.listSpace";
 /// The record key for singletons, and the labeler space's key.
 pub const SELF_RKEY: &str = "self";
 /// The group record's only record key.
@@ -62,6 +76,19 @@ pub const LEXICONS: &[(&str, &str)] = &[
     (LIKE, include_str!("../lexicons/tools/umbrae/like.json")),
     (GROUP, include_str!("../lexicons/tools/umbrae/group.json")),
     (REPOST, include_str!("../lexicons/tools/umbrae/repost.json")),
+    (LIST, include_str!("../lexicons/tools/umbrae/list.json")),
+    (
+        LISTITEM,
+        include_str!("../lexicons/tools/umbrae/listitem.json"),
+    ),
+    (
+        EXEMPTION,
+        include_str!("../lexicons/tools/umbrae/exemption.json"),
+    ),
+    (
+        LIST_SPACE_TYPE,
+        include_str!("../lexicons/tools/umbrae/listSpace.json"),
+    ),
     (
         BOOKMARK,
         include_str!("../lexicons/tools/umbrae/bookmark.json"),
@@ -123,7 +150,10 @@ mod tests {
             .iter()
             .map(|c| c.as_str().unwrap())
             .collect();
-        assert_eq!(cols, [POST, LIKE, GROUP, BOOKMARK, REPOST]);
+        assert_eq!(
+            cols,
+            [POST, LIKE, GROUP, BOOKMARK, REPOST, LIST, LISTITEM, EXEMPTION]
+        );
     }
 
     #[test]

@@ -1,0 +1,44 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.list",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A hidden list of accounts. A personal list sits at a TID key in its owner's only-me space; a shared list is a tools.umbrae.listSpace space, with this record at key self. Never in a public repo.",
+      "key": "any",
+      "record": {
+        "type": "object",
+        "required": [
+          "purpose",
+          "name",
+          "createdAt"
+        ],
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "block",
+              "mute",
+              "curate"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 640,
+            "maxGraphemes": 64
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 3000,
+            "maxGraphemes": 300
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

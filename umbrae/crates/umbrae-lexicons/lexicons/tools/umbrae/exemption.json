@@ -1,0 +1,81 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.exemption",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Don't apply a label, a labeler's labels, or a list to one account. Kept in the owner's only-me space.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": [
+          "subject",
+          "kind",
+          "createdAt"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "format": "did"
+          },
+          "kind": {
+            "type": "union",
+            "closed": true,
+            "refs": [
+              "#label",
+              "#labeler",
+              "#list"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    },
+    "label": {
+      "type": "object",
+      "required": [
+        "labeler",
+        "val"
+      ],
+      "properties": {
+        "labeler": {
+          "type": "string",
+          "format": "did"
+        },
+        "val": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "labeler": {
+      "type": "object",
+      "required": [
+        "labeler"
+      ],
+      "properties": {
+        "labeler": {
+          "type": "string",
+          "format": "did"
+        }
+      }
+    },
+    "list": {
+      "type": "object",
+      "required": [
+        "list"
+      ],
+      "properties": {
+        "list": {
+          "type": "string",
+          "format": "uri",
+          "description": "A public app.bsky.graph.list at-uri, one of the owner's personal tools.umbrae.list records, or a shared list's self record."
+        }
+      }
+    }
+  }
+}

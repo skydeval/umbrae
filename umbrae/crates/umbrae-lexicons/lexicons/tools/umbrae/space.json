@@ -12,7 +12,10 @@
         "tools.umbrae.like",
         "tools.umbrae.group",
         "tools.umbrae.bookmark",
-        "tools.umbrae.repost"
+        "tools.umbrae.repost",
+        "tools.umbrae.list",
+        "tools.umbrae.listitem",
+        "tools.umbrae.exemption"
       ]
     }
   }

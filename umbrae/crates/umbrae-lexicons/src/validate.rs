@@ -14,7 +14,11 @@
 //!   and its subject is a hidden post (in any Umbrae space). Show it only
 //!   while its owner may still see that post.
 
-use crate::{BOOKMARK, GROUP, GROUP_RKEY, LIKE, POST, REPOST, SPACE_TYPE};
+use crate::list::{exemption, list, listitem, Exemption, List, ListItem};
+use crate::{
+    BOOKMARK, EXEMPTION, GROUP, GROUP_RKEY, LIKE, LIST, LISTITEM, POST, REPOST, SELF_RKEY,
+    SPACE_TYPE,
+};
 use std::collections::BTreeMap;
 use std::fmt;
 use umbrae_core::cid::Cid;
@@ -165,6 +169,10 @@ pub enum Record {
     Group(Group),
     Bookmark(Bookmark),
     Repost(Repost),
+    /// A personal list, in the owner's only-me space.
+    List(List),
+    ListItem(ListItem),
+    Exemption(Exemption),
 }
 
 const EMBEDS: &[&str] = &[
@@ -186,7 +194,11 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
         return Err(Invalid("not a tools.umbrae.space space"));
     }
     let collection = uri.collection();
-    if ![POST, LIKE, GROUP, BOOKMARK, REPOST].contains(&collection) {
+    if ![
+        POST, LIKE, GROUP, BOOKMARK, REPOST, LIST, LISTITEM, EXEMPTION,
+    ]
+    .contains(&collection)
+    {
         return Ok(None);
     }
     match value.get("$type") {
@@ -201,6 +213,19 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
         LIKE => {
             tid_key(uri)?;
             Record::Like(like(value, space)?)
+        }
+        LIST | LISTITEM | EXEMPTION => {
+            tid_key(uri)?;
+            if space.skey() != SELF_RKEY || uri.author() != space.authority() {
+                return Err(Invalid(
+                    "lists and exemptions live only in their owner's only-me space",
+                ));
+            }
+            match collection {
+                LIST => Record::List(list(value)?),
+                LISTITEM => Record::ListItem(listitem(value, true)?),
+                _ => Record::Exemption(exemption(value, space.authority())?),
+            }
         }
         REPOST => {
             tid_key(uri)?;
@@ -427,7 +452,7 @@ fn strong_ref(v: Option<&Value>) -> Result<StrongRef, Invalid> {
     })
 }
 
-fn mentions_space_uri(v: &Value) -> bool {
+pub(crate) fn mentions_space_uri(v: &Value) -> bool {
     match v {
         Value::Text(t) => contains_space_uri(t),
         Value::Array(a) => a.iter().any(mentions_space_uri),
@@ -458,7 +483,7 @@ pub(crate) fn string(
     }
 }
 
-fn datetime(m: &Map, key: &str) -> Result<String, Invalid> {
+pub(crate) fn datetime(m: &Map, key: &str) -> Result<String, Invalid> {
     match m.get(key) {
         Some(Value::Text(t)) if is_datetime(t) => Ok(t.clone()),
         _ => Err(Invalid("createdAt must be an atproto datetime")),

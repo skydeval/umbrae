@@ -4,14 +4,21 @@
 //! |---|---|---|
 //! | a group | a TID | memberspace, not public, policy and members published |
 //! | only me | `self` | personalspace |
+//! | a shared list | a TID | memberspace, not public, policy published, members **not** published |
+//!
+//! A shared list's subscribers are read-only members who can't see each
+//! other. With no published member list, no app can serve the list: each
+//! subscriber's client reads it from the owner's PDS. Personal lists and
+//! exemptions sit in only-me.
 //!
 //! Publishing the member list puts it in the authority's repo inside the
 //! space, so only people who can read the space see it. That is also how an
 //! app serving the posts learns who may see them.
 
+use umbrae_core::policy::MemberAccess;
 use umbrae_core::policy::{MemberPolicy, Policy};
 use umbrae_core::uri::{is_valid_tid, SpaceRef, UriError};
-use umbrae_lexicons::SPACE_TYPE;
+use umbrae_lexicons::{LIST_SPACE_TYPE, SPACE_TYPE};
 
 /// The only-me space's key.
 pub const ONLY_ME_SKEY: &str = "self";
@@ -46,6 +53,48 @@ pub fn group_policy(allowed_apps: Option<Vec<String>>) -> Policy {
 
 pub fn only_me_policy() -> Policy {
     Policy::Personal
+}
+
+/// A shared list's space. The key must be a TID.
+pub fn list_space(owner: &str, skey: &str) -> Result<SpaceRef, UriError> {
+    if !is_valid_tid(skey) {
+        return Err(UriError::InvalidSkey);
+    }
+    SpaceRef::new(owner, LIST_SPACE_TYPE, skey)
+}
+
+/// The policy a shared list is created with: members are subscribers and
+/// the member list stays unpublished.
+pub fn list_policy(allowed_apps: Option<Vec<String>>) -> Policy {
+    Policy::Member(MemberPolicy {
+        public_read: false,
+        public_write: false,
+        allowed_apps,
+        publish_policy: true,
+        publish_members: false,
+    })
+}
+
+/// A subscriber's access: read, never write.
+pub fn subscriber() -> MemberAccess {
+    MemberAccess {
+        read: true,
+        write: false,
+    }
+}
+
+/// Check that `policy` is what a shared list must have. A published member
+/// list would show subscribers to each other: `WrongPolicy`.
+pub fn check_list_policy(space: &SpaceRef, policy: &Policy) -> Result<(), Misconfigured> {
+    if space.space_type() != LIST_SPACE_TYPE {
+        return Err(Misconfigured::NotUmbrae);
+    }
+    match policy {
+        Policy::Member(p) if p.public_read => Err(Misconfigured::PublicRead),
+        Policy::Member(p) if p.public_write => Err(Misconfigured::PublicWrite),
+        Policy::Member(p) if !p.publish_members && is_valid_tid(space.skey()) => Ok(()),
+        _ => Err(Misconfigured::WrongPolicy),
+    }
 }
 
 /// Why a space isn't one Umbrae will post into or show.
@@ -86,6 +135,38 @@ mod tests {
 
     const ALICE: &str = "did:plc:aliceaaaaaaaaaaaaaaaaaaa";
     const SKEY: &str = "3mbbbbbbbbbb2";
+
+    #[test]
+    fn shared_lists() {
+        let l = list_space(ALICE, SKEY).unwrap();
+        assert_eq!(
+            l.to_string(),
+            format!("at://{ALICE}/space/{LIST_SPACE_TYPE}/{SKEY}")
+        );
+        assert!(list_space(ALICE, "self").is_err());
+        let p = list_policy(None);
+        assert_eq!(Policy::from_map(&p.to_map()).unwrap(), p);
+        assert_eq!(check_list_policy(&l, &p), Ok(()));
+        // Published members, a group's policy, public reads, wrong type.
+        assert_eq!(
+            check_list_policy(&l, &group_policy(None)),
+            Err(Misconfigured::WrongPolicy)
+        );
+        assert_eq!(
+            check_list_policy(&l, &only_me_policy()),
+            Err(Misconfigured::WrongPolicy)
+        );
+        let mut open = list_policy(None);
+        if let Policy::Member(m) = &mut open {
+            m.public_read = true;
+        }
+        assert_eq!(check_list_policy(&l, &open), Err(Misconfigured::PublicRead));
+        let g = group_space(ALICE, SKEY).unwrap();
+        assert_eq!(check_list_policy(&g, &p), Err(Misconfigured::NotUmbrae));
+        // And a list space is never a group.
+        assert_eq!(check_policy(&l, &p), Err(Misconfigured::NotUmbrae));
+        assert!(subscriber().read && !subscriber().write);
+    }
 
     #[test]
     fn spaces() {
