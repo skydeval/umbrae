@@ -124,7 +124,7 @@ pub(crate) fn follow(m: &Map, uri: &SpaceRecordUri) -> Result<Follow, Invalid> {
 
 pub(crate) fn threadgate(m: &Map, uri: &SpaceRecordUri) -> Result<Threadgate, Invalid> {
     let post = gated_post(m, uri)?;
-    let hidden_replies = posts_here(m.get("hiddenReplies"), uri.space(), 5000)?;
+    let hidden_replies = posts_here(m.get("hiddenReplies"), uri.space(), 300)?;
     let allow = match m.get("allow") {
         None => None,
         Some(Value::Array(rules)) if rules.len() <= 5 => Some(
@@ -301,7 +301,7 @@ mod tests {
         ]));
         let p = map(&[
             ("$type", t(PROFILE)),
-            ("displayName", t("jheya")),
+            ("displayName", t("Alice")),
             ("pronouns", t("she/her")),
             ("website", t("https://example.com")),
             ("avatar", avatar),
@@ -447,6 +447,28 @@ mod tests {
             ("list", t(&elsewhere)),
         ]))]);
         assert!(validate_record(&gate_at, &g(&[("allow", bad_list)])).is_err());
+        let not_tid = Value::Array(vec![Value::Map(map(&[
+            ("$type", t(RULE_LIST)),
+            ("list", t("mutes")),
+        ]))]);
+        assert!(validate_record(&gate_at, &g(&[("allow", not_tid)])).is_err());
+        // At most five rules, in an array.
+        let five = Value::Array(vec![rule(RULE_MENTION); 5]);
+        assert!(validate_record(&gate_at, &g(&[("allow", five)])).is_ok());
+        let six = Value::Array(vec![rule(RULE_MENTION); 6]);
+        assert!(validate_record(&gate_at, &g(&[("allow", six)])).is_err());
+        assert!(validate_record(&gate_at, &g(&[("allow", rule(RULE_MENTION))])).is_err());
+        // Hidden replies are posts, at most 300, as on Bluesky.
+        let like_here = at(GROUP, ALICE, crate::LIKE, "3mbaaaaaaaaa3").to_string();
+        assert!(validate_record(&gate_at, &g(&[("hiddenReplies", arr(&[like_here]))])).is_err());
+        let most = vec![reply.clone(); 300];
+        assert!(validate_record(&gate_at, &g(&[("hiddenReplies", arr(&most))])).is_ok());
+        let too_many = vec![reply.clone(); 301];
+        assert!(validate_record(&gate_at, &g(&[("hiddenReplies", arr(&too_many))])).is_err());
+        // A gate at `self` that names a post at `self` still refuses.
+        let mut at_self = g(&[]);
+        at_self.insert("post".into(), t(&at(GROUP, BOB, POST, "self").to_string()));
+        assert!(validate_record(&at(GROUP, BOB, THREADGATE, "self"), &at_self).is_err());
     }
 
     #[test]
@@ -466,7 +488,7 @@ mod tests {
         match validate_record(
             &gate_at,
             &g(&[
-                ("detachedEmbeddingUris", arr(&[quote])),
+                ("detachedEmbeddingUris", arr(&[quote.clone()])),
                 ("embeddingRules", Value::Array(vec![rule(RULE_DISABLE)])),
             ]),
         )
@@ -499,5 +521,33 @@ mod tests {
         let mut wrong = g(&[]);
         wrong.insert("post".into(), t(&at(GROUP, ALICE, POST, RKEY).to_string()));
         assert!(validate_record(&gate_at, &wrong).is_err());
+        // Nothing beside `post` and `detachedEmbeddingUris` names a hidden
+        // record: not a top-level field, nor one inside an unknown array.
+        assert!(validate_record(&gate_at, &g(&[("via", t(&elsewhere))])).is_err());
+        let prose = arr(&[format!("see {elsewhere}")]);
+        assert!(validate_record(&gate_at, &g(&[("notes", prose)])).is_err());
+        // Detached quotes are posts, at most 50.
+        let like_here = at(GROUP, ALICE, crate::LIKE, "3mbaaaaaaaaa3").to_string();
+        assert!(validate_record(
+            &gate_at,
+            &g(&[("detachedEmbeddingUris", arr(&[like_here]))])
+        )
+        .is_err());
+        let most = vec![quote.clone(); 50];
+        assert!(validate_record(&gate_at, &g(&[("detachedEmbeddingUris", arr(&most))])).is_ok());
+        let too_many = vec![quote.clone(); 51];
+        assert!(
+            validate_record(&gate_at, &g(&[("detachedEmbeddingUris", arr(&too_many))])).is_err()
+        );
+        // At most five embedding rules; an empty list leaves quotes on.
+        let six = Value::Array(vec![rule(RULE_DISABLE); 6]);
+        assert!(validate_record(&gate_at, &g(&[("embeddingRules", six)])).is_err());
+        match validate_record(&gate_at, &g(&[("embeddingRules", Value::Array(vec![]))]))
+            .unwrap()
+            .unwrap()
+        {
+            Record::Postgate(x) => assert!(!x.disable_quotes),
+            other => panic!("{other:?}"),
+        }
     }
 }

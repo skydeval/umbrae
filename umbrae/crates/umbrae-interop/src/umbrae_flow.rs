@@ -8,6 +8,7 @@
 //! what. Then Alice removes Bob and the app's view follows.
 
 use crate::{credential_headers, expect_refusal, lexjson, with_mac, Account, Pds, Report, Resp};
+use base64::Engine as _;
 use p256::ecdsa::SigningKey;
 use rand_core::OsRng;
 use serde_json::{json, Value};
@@ -17,7 +18,8 @@ use umbrae::access::{
 };
 use umbrae::placement::{leaks_hidden, like_space, quote_space, reply_space, repost_space};
 use umbrae::space::{
-    check_list_policy, check_policy, group_policy, group_space, list_policy, list_space, subscriber,
+    check_list_policy, check_policy, followers_space, group_policy, group_space, list_policy,
+    list_space, subscriber,
 };
 use umbrae::{SpaceState, Tri, ViewContext, SPACE_TYPE};
 use umbrae_core::cid::Cid;
@@ -28,8 +30,9 @@ use umbrae_core::repo_archive::{read_repo_archive, ArchivedRecord};
 use umbrae_core::uri::{SpaceRecordUri, SpaceRef};
 use umbrae_core::{didkey, kem};
 use umbrae_lexicons::{
-    validate_list_record, validate_record, ListRecord, Record, Target, GROUP, GROUP_RKEY, LIKE,
-    LIST, LISTITEM, LIST_SPACE_TYPE, POST, REPOST, SELF_RKEY,
+    validate_list_record, validate_record, ListRecord, Record, ReplyRule, Target, GROUP,
+    GROUP_RKEY, LIKE, LIST, LISTITEM, LIST_SPACE_TYPE, POST, POSTGATE, PROFILE, REPOST,
+    RULE_DISABLE, RULE_FOLLOWER, SELF_RKEY, THREADGATE,
 };
 
 const SKEY: &str = "3mbbbbbbbbbb2";
@@ -88,6 +91,9 @@ pub(crate) fn delegation(pds: &Pds, space: &str, who: &Account) -> Result<String
 pub(crate) struct Synced {
     pub(crate) writers: Vec<String>,
     pub(crate) repos: BTreeMap<String, Vec<ArchivedRecord>>,
+    /// The space credential and the key it's bound to, for further reads.
+    pub(crate) credential: String,
+    pub(crate) key: SigningKey,
 }
 
 /// Sync through `via`'s delegation, presenting `attestation` when the
@@ -159,7 +165,12 @@ pub(crate) fn sync(
             .map_err(|e| format!("{did}: {e}"))?;
         repos.insert(did.clone(), records);
     }
-    Ok(Synced { writers, repos })
+    Ok(Synced {
+        writers,
+        repos,
+        credential,
+        key,
+    })
 }
 
 fn state_of(space: &SpaceRef, s: &Synced) -> SpaceState {
@@ -629,6 +640,214 @@ pub(crate) fn lists(
     report.check(
         "lists: a non-subscriber gets no credential for the list",
         expect_refusal(&r, Some("SpaceNotFound")),
+    );
+    Ok(())
+}
+
+/// A 1×1 PNG, for the hidden profile's avatar.
+const PNG_1X1: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+/// A private account: Alice's followers space holds her hidden profile,
+/// whose avatar is a blob, and a gated post. Bob is an approved follower;
+/// Carol isn't.
+pub(crate) fn followers(
+    pds: &Pds,
+    dir: &crate::plc::Directory,
+    report: &mut Report,
+    alice: &Account,
+    bob: &Account,
+    carol: &Account,
+) -> Result<(), String> {
+    let space = followers_space(&alice.did).map_err(|e| e.to_string())?;
+    let space_str = space.to_string();
+    let wanted = group_policy(None);
+    let mut policy_json = json!({ "$type": "com.atproto.memberspace.policy" });
+    for (k, v) in wanted.to_map() {
+        if let D::Bool(b) = v {
+            policy_json[k] = json!(b);
+        }
+    }
+    pds.post(
+        "com.atproto.space.createSpace",
+        &json!({ "spaceType": SPACE_TYPE, "skey": space.skey(), "policy": policy_json }),
+        &alice.auth(),
+    )?
+    .ok("createSpace followers")?;
+    let got = pds
+        .get(
+            "com.atproto.space.getSpace",
+            &[("space", &space_str)],
+            &alice.auth(),
+        )?
+        .ok("getSpace followers")?
+        .json();
+    let stored = map(&got["policy"]).and_then(|m| Policy::from_map(&m).map_err(|e| e.to_string()));
+    report.check(
+        "followers: the PDS takes skey followers with the group policy, and it passes check_policy",
+        match stored {
+            Ok(p) if p == wanted && check_policy(&space, &p).is_ok() => Ok(space_str.clone()),
+            Ok(p) => Err(format!("{p:?}")),
+            Err(e) => Err(e),
+        },
+    );
+
+    // The avatar: a PNG uploaded to Alice's PDS and referenced only here.
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(PNG_1X1)
+        .map_err(|e| e.to_string())?;
+    let avatar_cid = Cid::for_raw(&png);
+    let blob = pds
+        .post_bytes(
+            "com.atproto.repo.uploadBlob",
+            "image/png",
+            &png,
+            &alice.auth(),
+        )?
+        .ok("uploadBlob")?
+        .json()["blob"]
+        .clone();
+    let write = |who: &Account, collection: &str, rkey: &str, record: &Value| {
+        pds.post(
+            "com.atproto.space.createRecord",
+            &json!({ "space": space_str, "repo": who.did, "collection": collection, "rkey": rkey, "record": record }),
+            &who.auth(),
+        )
+    };
+    let profile = json!({ "$type": PROFILE, "displayName": "Alice",
+        "website": "https://alice.example", "avatar": blob, "createdAt": CREATED });
+    write(alice, PROFILE, SELF_RKEY, &profile)?.ok("profile")?;
+    let post_rkey = "3mbaaaaaaaae2";
+    let post_uri = space
+        .record(&alice.did, POST, post_rkey)
+        .map_err(|e| e.to_string())?;
+    let post = json!({ "$type": POST, "text": "followers only", "createdAt": CREATED });
+    let post_cid = write(alice, POST, post_rkey, &post)?
+        .ok("followers post")?
+        .json()["cid"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    pds.post(
+        "com.atproto.memberspace.putMembers",
+        &json!({ "space": space_str, "members": [{ "did": bob.did, "read": true, "write": true }] }),
+        &alice.auth(),
+    )?
+    .ok("putMembers followers")?;
+    let parent = json!({ "uri": post_uri.to_string(), "cid": post_cid });
+    let reply_rkey = "3mbaaaaaaaae3";
+    let reply_uri = space
+        .record(&bob.did, POST, reply_rkey)
+        .map_err(|e| e.to_string())?;
+    let reply = json!({ "$type": POST, "text": "hello", "createdAt": CREATED,
+        "reply": { "root": parent, "parent": parent } });
+    write(bob, POST, reply_rkey, &reply)?.ok("follower reply")?;
+    let threadgate = json!({ "$type": THREADGATE, "post": post_uri.to_string(),
+        "allow": [{ "$type": RULE_FOLLOWER }], "hiddenReplies": [reply_uri.to_string()],
+        "createdAt": CREATED });
+    write(alice, THREADGATE, post_rkey, &threadgate)?.ok("threadgate")?;
+    let postgate = json!({ "$type": POSTGATE, "post": post_uri.to_string(),
+        "embeddingRules": [{ "$type": RULE_DISABLE }], "createdAt": CREATED });
+    write(alice, POSTGATE, post_rkey, &postgate)?.ok("postgate")?;
+
+    // Bob syncs, and every record validates.
+    let synced = sync(pds, dir, &space, bob, None)?;
+    let mut kinds = Vec::new();
+    let mut bad = Vec::new();
+    for (u, v) in umbrae_records(&space, &synced) {
+        match v {
+            Ok(Some(Record::Profile(p)))
+                if p.avatar.as_ref().map(|a| a.cid) == Some(avatar_cid) =>
+            {
+                kinds.push("profile")
+            }
+            Ok(Some(Record::Post(p))) if p.reply.is_some() => kinds.push("reply"),
+            Ok(Some(Record::Post(_))) => kinds.push("post"),
+            Ok(Some(Record::Threadgate(g)))
+                if g.post == post_uri
+                    && g.allow == Some(vec![ReplyRule::Follower])
+                    && g.hidden_replies == [reply_uri.clone()] =>
+            {
+                kinds.push("threadgate")
+            }
+            Ok(Some(Record::Postgate(g))) if g.post == post_uri && g.disable_quotes => {
+                kinds.push("postgate")
+            }
+            other => bad.push(format!("{} {} {other:?}", u.collection(), u.rkey())),
+        }
+    }
+    kinds.sort();
+    report.check(
+        "followers: a follower's sync validates the profile (avatar intact), the post, a reply and both gates",
+        if bad.is_empty() && kinds == ["post", "postgate", "profile", "reply", "threadgate"] {
+            Ok(kinds.join(", "))
+        } else {
+            Err(format!("{kinds:?} {bad:?}"))
+        },
+    );
+    let state = state_of(&space, &synced);
+    let profile_uri = space
+        .record(&alice.did, PROFILE, SELF_RKEY)
+        .map_err(|e| e.to_string())?;
+    let ctx = Ctx(BTreeSet::new());
+    report.check(
+        "followers: the approved follower sees the profile; Carol and signed-out viewers don't",
+        if can_view_record(Some(&bob.did), &profile_uri, &state, &ctx)
+            && !can_view_record(Some(&carol.did), &profile_uri, &state, &ctx)
+            && !can_view_record(None, &profile_uri, &state, &ctx)
+            && can_write(&bob.did, &state, &ctx)
+        {
+            Ok("bob only".into())
+        } else {
+            Err(format!("{state:?}"))
+        },
+    );
+
+    // The avatar isn't public, but the follower can fetch it. The space
+    // fetch proves the blob is there, so the public refusal means something.
+    let avatar = avatar_cid.to_string();
+    let public = pds.get(
+        "com.atproto.sync.getBlob",
+        &[("did", &alice.did), ("cid", &avatar)],
+        &vec![],
+    )?;
+    let listed = pds
+        .get(
+            "com.atproto.sync.listBlobs",
+            &[("did", &alice.did)],
+            &vec![],
+        )?
+        .ok("listBlobs")?
+        .json();
+    let in_listing = listed["cids"]
+        .as_array()
+        .is_some_and(|a| a.iter().any(|c| c == &json!(avatar)));
+    let via_space = pds.get(
+        "com.atproto.space.getBlob",
+        &[
+            ("space", &space_str),
+            ("repo", &alice.did),
+            ("cid", &avatar),
+        ],
+        &credential_headers(&synced.credential, &alice.did, &synced.key),
+    )?;
+    report.check(
+        "followers: the avatar isn't served or listed publicly; the follower gets it through space getBlob, and it hashes to its CID",
+        match (expect_refusal(&public, Some("BlobNotFound")), in_listing) {
+            (Ok(refused), false)
+                if via_space.status == 200 && Cid::for_raw(&via_space.body) == avatar_cid =>
+            {
+                Ok(format!(
+                    "public {refused}; space getBlob {} bytes",
+                    via_space.body.len()
+                ))
+            }
+            (public, listed) => Err(format!(
+                "public {public:?}, listed {listed}, space getBlob HTTP {} {}",
+                via_space.status,
+                via_space.error_name()
+            )),
+        },
     );
     Ok(())
 }

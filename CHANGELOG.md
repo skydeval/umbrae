@@ -6,7 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-20
+
 ### Added
+- Private accounts: a `tools.umbrae.space` space with the key `followers` holds a private account's approved followers. It uses the group policy (`followers_space`, accepted by `check_policy`).
+- `tools.umbrae.profile`: the hidden profile, written by the authority at `self` in its followers space. It has display name, bio, pronouns, website, avatar and banner. The avatar and banner are served only through space `getBlob`.
+- `tools.umbrae.follow`: a hidden follow, a DID, kept in its owner's only-me space.
+- `tools.umbrae.threadgate`: reply rules (mention, following, follower, own list) and up to 300 hidden replies.
+- `tools.umbrae.postgate`: detached quotes, and turning quoting off. Both gates are written by the post's author, in the post's space, at the post's key.
+- Interop coverage of a followers space, the hidden profile and its blob, and both gates on the reference PDS.
 - Public design docs in `docs/design/`.
 
 ### Changed
@@ -99,7 +107,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/skydeval/umbrae/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/skydeval/umbrae/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/skydeval/umbrae/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/skydeval/umbrae/compare/v0.2.0...v0.3.0

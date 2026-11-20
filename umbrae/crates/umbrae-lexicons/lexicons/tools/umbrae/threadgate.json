@@ -35,7 +35,7 @@
           },
           "hiddenReplies": {
             "type": "array",
-            "maxLength": 5000,
+            "maxLength": 300,
             "items": {
               "type": "string",
               "format": "at-uri"

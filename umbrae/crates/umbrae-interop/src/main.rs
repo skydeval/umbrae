@@ -7,7 +7,8 @@
 //! to our own key, credential-use signatures, KEM key shares and MACs, the
 //! commit, the STAR archive and the operation log. Every check runs our
 //! code against the reference implementation's, in both directions.
-//! Then `umbrae_flow` runs the hidden-post flow with the `umbrae` crates,
+//! Then `umbrae_flow` runs the hidden-post, shared-list and followers
+//! flows with the `umbrae` crates,
 //! `labeler_flow` the private-labeler flow, and `sync_flow` the
 //! `umbrae-sync` crate end to end, notifications included.
 //!
@@ -135,6 +136,23 @@ impl Pds {
             r = r.set(k, v);
         }
         finish(r.send_json(body.clone()))
+    }
+
+    fn post_bytes(
+        &self,
+        nsid: &str,
+        content_type: &str,
+        body: &[u8],
+        headers: &Headers,
+    ) -> Result<Resp, String> {
+        let mut r = self
+            .agent
+            .post(&format!("{}/xrpc/{nsid}", self.url))
+            .set("Content-Type", content_type);
+        for (k, v) in headers {
+            r = r.set(k, v);
+        }
+        finish(r.send_bytes(body))
     }
 }
 
@@ -749,6 +767,7 @@ fn run(pds: &Pds, dir: &plc::Directory, report: &mut Report) -> Result<(), Strin
 
     umbrae_flow::run(pds, dir, report, &alice, &bob, &carol)?;
     umbrae_flow::lists(pds, dir, report, &alice, &bob, &carol)?;
+    umbrae_flow::followers(pds, dir, report, &alice, &bob, &carol)?;
     labeler_flow::run(pds, dir, report, &carol)?;
     sync_flow::run(pds, dir, report, &alice, &bob)
 }

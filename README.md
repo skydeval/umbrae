@@ -21,6 +21,7 @@ Umbrae isn't a server. It's lexicons, rules and protocol code that clients, PDSe
 - **Hidden posts:** posts, replies, likes, reposts and same-group quotes. One space per audience (a group, or only-me).
 - **Bookmarks** of hidden posts, kept in only-me.
 - **Private labelers:** labels readable only by admitted accounts, labels on hidden posts and accounts, and labels restricted to a permitted list.
+- **Private accounts:** an approved-followers audience, a hidden profile, hidden follows, and reply and quote gates.
 - **Hidden lists:** block, mute and curate lists, personal (in only-me) or shared (subscribers can't see each other). Also exemptions from labels, labelers and lists.
 
 The design is documented in [`docs/design/`](docs/design/README.md).
