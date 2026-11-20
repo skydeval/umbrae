@@ -15,9 +15,10 @@
 //!   while its owner may still see that post.
 
 use crate::list::{exemption, list, listitem, Exemption, List, ListItem};
+use crate::social::{follow, postgate, profile, threadgate, Follow, Postgate, Profile, Threadgate};
 use crate::{
-    BOOKMARK, EXEMPTION, GROUP, GROUP_RKEY, LIKE, LIST, LISTITEM, POST, REPOST, SELF_RKEY,
-    SPACE_TYPE,
+    BOOKMARK, EXEMPTION, FOLLOW, GROUP, GROUP_RKEY, LIKE, LIST, LISTITEM, POST, POSTGATE, PROFILE,
+    REPOST, SELF_RKEY, SPACE_TYPE, THREADGATE,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -173,6 +174,12 @@ pub enum Record {
     List(List),
     ListItem(ListItem),
     Exemption(Exemption),
+    /// The hidden profile, in the followers space.
+    Profile(Box<Profile>),
+    /// A hidden follow, in only-me.
+    Follow(Follow),
+    Threadgate(Box<Threadgate>),
+    Postgate(Box<Postgate>),
 }
 
 const EMBEDS: &[&str] = &[
@@ -195,7 +202,8 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
     }
     let collection = uri.collection();
     if ![
-        POST, LIKE, GROUP, BOOKMARK, REPOST, LIST, LISTITEM, EXEMPTION,
+        POST, LIKE, GROUP, BOOKMARK, REPOST, LIST, LISTITEM, EXEMPTION, PROFILE, FOLLOW,
+        THREADGATE, POSTGATE,
     ]
     .contains(&collection)
     {
@@ -214,6 +222,13 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
             tid_key(uri)?;
             Record::Like(like(value, space)?)
         }
+        PROFILE => Record::Profile(Box::new(profile(value, uri)?)),
+        FOLLOW => {
+            tid_key(uri)?;
+            Record::Follow(follow(value, uri)?)
+        }
+        THREADGATE => Record::Threadgate(Box::new(threadgate(value, uri)?)),
+        POSTGATE => Record::Postgate(Box::new(postgate(value, uri)?)),
         LIST | LISTITEM | EXEMPTION => {
             tid_key(uri)?;
             if space.skey() != SELF_RKEY || uri.author() != space.authority() {

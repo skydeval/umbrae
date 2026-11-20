@@ -3,6 +3,7 @@
 //! | Audience | skey | Policy |
 //! |---|---|---|
 //! | a group | a TID | memberspace, not public, policy and members published |
+//! | a private account's approved followers | `followers` | memberspace, as a group |
 //! | only me | `self` | personalspace |
 //! | a shared list | a TID | memberspace, not public, policy published, members **not** published |
 //!
@@ -18,7 +19,7 @@
 use umbrae_core::policy::MemberAccess;
 use umbrae_core::policy::{MemberPolicy, Policy};
 use umbrae_core::uri::{is_valid_tid, SpaceRef, UriError};
-use umbrae_lexicons::{LIST_SPACE_TYPE, SPACE_TYPE};
+use umbrae_lexicons::{FOLLOWERS_SKEY, LIST_SPACE_TYPE, SPACE_TYPE};
 
 /// The only-me space's key.
 pub const ONLY_ME_SKEY: &str = "self";
@@ -29,6 +30,12 @@ pub fn group_space(author: &str, skey: &str) -> Result<SpaceRef, UriError> {
         return Err(UriError::InvalidSkey);
     }
     SpaceRef::new(author, SPACE_TYPE, skey)
+}
+
+/// A private account's followers space. It takes the group policy;
+/// approved followers are members with read and write.
+pub fn followers_space(author: &str) -> Result<SpaceRef, UriError> {
+    SpaceRef::new(author, SPACE_TYPE, FOLLOWERS_SKEY)
 }
 
 pub fn only_me_space(author: &str) -> Result<SpaceRef, UriError> {
@@ -125,7 +132,11 @@ pub fn check_policy(space: &SpaceRef, policy: &Policy) -> Result<(), Misconfigur
         (false, Policy::Member(p)) if !(p.publish_policy && p.publish_members) => {
             Err(Misconfigured::Unpublished)
         }
-        (false, Policy::Member(_)) if is_valid_tid(space.skey()) => Ok(()),
+        (false, Policy::Member(_))
+            if is_valid_tid(space.skey()) || space.skey() == FOLLOWERS_SKEY =>
+        {
+            Ok(())
+        }
         _ => Err(Misconfigured::WrongPolicy),
     }
 }
@@ -136,6 +147,28 @@ mod tests {
 
     const ALICE: &str = "did:plc:aliceaaaaaaaaaaaaaaaaaaa";
     const SKEY: &str = "3mbbbbbbbbbb2";
+
+    #[test]
+    fn followers_space_is_a_group() {
+        let f = followers_space(ALICE).unwrap();
+        assert_eq!(f.skey(), FOLLOWERS_SKEY);
+        assert!(!is_only_me(&f));
+        assert_eq!(check_policy(&f, &group_policy(None)), Ok(()));
+        assert_eq!(
+            check_policy(&f, &only_me_policy()),
+            Err(Misconfigured::WrongPolicy)
+        );
+        assert_eq!(
+            check_policy(&f, &list_policy(None)),
+            Err(Misconfigured::Unpublished)
+        );
+        // Any other non-TID key is still refused.
+        let odd = SpaceRef::new(ALICE, SPACE_TYPE, "friends").unwrap();
+        assert_eq!(
+            check_policy(&odd, &group_policy(None)),
+            Err(Misconfigured::WrongPolicy)
+        );
+    }
 
     #[test]
     fn shared_lists() {

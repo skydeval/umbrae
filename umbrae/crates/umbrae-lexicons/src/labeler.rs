@@ -297,7 +297,7 @@ fn profile(m: &Map) -> Result<LabelerProfile, Invalid> {
 const IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg"];
 const MAX_IMAGE: i64 = 1_000_000;
 
-fn blob(v: Option<&Value>) -> Result<Option<BlobRef>, Invalid> {
+pub(crate) fn blob(v: Option<&Value>) -> Result<Option<BlobRef>, Invalid> {
     let m = match v {
         None => return Ok(None),
         Some(Value::Map(m)) => m,

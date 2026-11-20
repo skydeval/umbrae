@@ -1,0 +1,53 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.postgate",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Quote controls for a hidden post. Written by the post's author in the post's space, at the post's record key. Enforced where posts are shown.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": [
+          "post",
+          "createdAt"
+        ],
+        "properties": {
+          "post": {
+            "type": "string",
+            "format": "at-uri"
+          },
+          "detachedEmbeddingUris": {
+            "type": "array",
+            "maxLength": 50,
+            "items": {
+              "type": "string",
+              "format": "at-uri"
+            },
+            "description": "Quotes, in this space, shown without this post."
+          },
+          "embeddingRules": {
+            "type": "array",
+            "maxLength": 5,
+            "items": {
+              "type": "union",
+              "closed": true,
+              "refs": [
+                "#disableRule"
+              ]
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    },
+    "disableRule": {
+      "type": "object",
+      "description": "Nobody may quote the post.",
+      "properties": {}
+    }
+  }
+}

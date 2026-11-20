@@ -1,0 +1,81 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.threadgate",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Who may reply to a hidden post, and which replies its author hides for everyone. Written by the post's author in the post's space, at the post's record key. Enforced where posts are shown.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": [
+          "post",
+          "createdAt"
+        ],
+        "properties": {
+          "post": {
+            "type": "string",
+            "format": "at-uri",
+            "description": "The gated post: the author's own tools.umbrae.post at this record's key, in this space."
+          },
+          "allow": {
+            "type": "array",
+            "maxLength": 5,
+            "items": {
+              "type": "union",
+              "closed": true,
+              "refs": [
+                "#mentionRule",
+                "#followingRule",
+                "#followerRule",
+                "#listRule"
+              ]
+            },
+            "description": "Absent: anyone who can see the post may reply. Empty: nobody."
+          },
+          "hiddenReplies": {
+            "type": "array",
+            "maxLength": 5000,
+            "items": {
+              "type": "string",
+              "format": "at-uri"
+            },
+            "description": "Replies, in this space, hidden for everyone but their authors."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    },
+    "mentionRule": {
+      "type": "object",
+      "description": "Accounts mentioned in the post.",
+      "properties": {}
+    },
+    "followingRule": {
+      "type": "object",
+      "description": "Accounts the author follows, publicly or hidden.",
+      "properties": {}
+    },
+    "followerRule": {
+      "type": "object",
+      "description": "Approved members of the author's followers space.",
+      "properties": {}
+    },
+    "listRule": {
+      "type": "object",
+      "required": [
+        "list"
+      ],
+      "properties": {
+        "list": {
+          "type": "string",
+          "format": "tid",
+          "description": "The record key of one of the author's personal tools.umbrae.list records."
+        }
+      }
+    }
+  }
+}

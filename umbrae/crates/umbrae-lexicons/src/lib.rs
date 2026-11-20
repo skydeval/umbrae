@@ -12,6 +12,10 @@
 //! | `tools.umbrae.list` | a hidden list (block, mute or curate) |
 //! | `tools.umbrae.listitem` | one account on a hidden list |
 //! | `tools.umbrae.exemption` | don't apply a label, labeler or list to one account |
+//! | `tools.umbrae.profile` | the hidden profile, for approved followers |
+//! | `tools.umbrae.follow` | a hidden follow |
+//! | `tools.umbrae.threadgate` | who may reply to a hidden post, and hidden replies |
+//! | `tools.umbrae.postgate` | detached and disabled quotes of a hidden post |
 //! | `tools.umbrae.listSpace` | the space type: one shared list |
 //! | `tools.umbrae.labeler` | the space type: one private labeler |
 //! | `tools.umbrae.label` | a label (the fields of `com.atproto.label.defs#label`) |
@@ -27,6 +31,7 @@
 
 mod labeler;
 mod list;
+mod social;
 mod validate;
 
 pub use labeler::{
@@ -37,6 +42,10 @@ pub use labeler::{
 pub use list::{
     validate_list_record, Exemption, ExemptionKind, List, ListItem, ListRecord, ListRef, Purpose,
     EXEMPTION_LABEL, EXEMPTION_LABELER, EXEMPTION_LIST,
+};
+pub use social::{
+    Follow, Postgate, Profile, ReplyRule, Threadgate, RULE_DISABLE, RULE_FOLLOWER, RULE_FOLLOWING,
+    RULE_LIST, RULE_MENTION,
 };
 pub use validate::{
     validate_record, Bookmark, Group, Invalid, Like, Post, PublicUri, Record, Reply, Repost,
@@ -52,6 +61,12 @@ pub const REPOST: &str = "tools.umbrae.repost";
 pub const LIST: &str = "tools.umbrae.list";
 pub const LISTITEM: &str = "tools.umbrae.listitem";
 pub const EXEMPTION: &str = "tools.umbrae.exemption";
+pub const PROFILE: &str = "tools.umbrae.profile";
+pub const FOLLOW: &str = "tools.umbrae.follow";
+pub const THREADGATE: &str = "tools.umbrae.threadgate";
+pub const POSTGATE: &str = "tools.umbrae.postgate";
+/// The followers space's key: a private account's approved followers.
+pub const FOLLOWERS_SKEY: &str = "followers";
 /// The space type of a shared list.
 pub const LIST_SPACE_TYPE: &str = "tools.umbrae.listSpace";
 /// The record key for singletons, and the labeler space's key.
@@ -84,6 +99,19 @@ pub const LEXICONS: &[(&str, &str)] = &[
     (
         EXEMPTION,
         include_str!("../lexicons/tools/umbrae/exemption.json"),
+    ),
+    (
+        PROFILE,
+        include_str!("../lexicons/tools/umbrae/profile.json"),
+    ),
+    (FOLLOW, include_str!("../lexicons/tools/umbrae/follow.json")),
+    (
+        THREADGATE,
+        include_str!("../lexicons/tools/umbrae/threadgate.json"),
+    ),
+    (
+        POSTGATE,
+        include_str!("../lexicons/tools/umbrae/postgate.json"),
     ),
     (
         LIST_SPACE_TYPE,
@@ -152,7 +180,10 @@ mod tests {
             .collect();
         assert_eq!(
             cols,
-            [POST, LIKE, GROUP, BOOKMARK, REPOST, LIST, LISTITEM, EXEMPTION]
+            [
+                POST, LIKE, GROUP, BOOKMARK, REPOST, LIST, LISTITEM, EXEMPTION, PROFILE, FOLLOW,
+                THREADGATE, POSTGATE
+            ]
         );
     }
 
