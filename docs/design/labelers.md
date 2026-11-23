@@ -32,6 +32,7 @@ A labeler is either of these. The records and rules are the same either way.
 | an account (a DID) | everyone who may see the labeler |
 | a public record | everyone who may see the labeler |
 | a hidden post (`tools.umbrae.post` in a `tools.umbrae.space` space) | only people who may also see that post |
+| a hidden repost (`tools.umbrae.repost` in a `tools.umbrae.space` space) | only people who may also see that repost |
 
 A label on anything else refuses. The serving app decides who may see the labeler at all.
 

@@ -126,6 +126,15 @@ pub fn hidden_post_of(label: &Label) -> Option<SpaceRecordUri> {
     }
 }
 
+/// The hidden record a label is on, a post or a repost: look up that
+/// record's space state to decide who may see the label.
+pub fn hidden_record_of(label: &Label) -> Option<SpaceRecordUri> {
+    match label_subject(&label.uri) {
+        Some(LabelSubject::HiddenPost(u) | LabelSubject::HiddenRepost(u)) => Some(u),
+        _ => None,
+    }
+}
+
 /// One labeler's audiences, from the `tools.umbrae.labelerAudience` records
 /// in its space. Audience ids are only record keys, so another labeler can
 /// reuse one: an `Audiences` opens only labels whose `src` is its labeler.
@@ -167,8 +176,11 @@ impl Audiences {
 ///   `audiences`; an unknown audience, nobody. That includes the labeler
 ///   itself unless it lists its own DID.
 /// - On an account or a public record: no further condition.
-/// - On a hidden post: also only if they may see that post. `post_space` is
-///   the state of the post's space; without it, no (fail closed).
+/// - On a hidden post or repost: also only if they may see that record.
+///   `post_space` is the state of its space ([`hidden_record_of`]); without
+///   it, no (fail closed). A serving app shows a repost only while its
+///   subject is visible too ([`crate::access::can_view_repost`]), so a label
+///   on a repost rides on that.
 /// - On anything else: no.
 pub fn can_view_label(
     viewer: Option<&str>,
@@ -184,7 +196,7 @@ pub fn can_view_label(
     }
     match label_subject(&label.uri) {
         Some(LabelSubject::Account(_) | LabelSubject::Record(_)) => true,
-        Some(LabelSubject::HiddenPost(uri)) => {
+        Some(LabelSubject::HiddenPost(uri) | LabelSubject::HiddenRepost(uri)) => {
             post_space.is_some_and(|s| can_view_record(viewer, &uri, s, ctx))
         }
         _ => false,
@@ -653,6 +665,46 @@ mod tests {
         ));
         // Public subjects are as visible as the labeler.
         assert!(can_view_label(Some(CAROL), &on_public, None, &none, &c));
+        // A hidden repost, like a post: only those who may see it.
+        let repost = space
+            .record(BOB, umbrae_lexicons::REPOST, "3mbaaaaaaaaa4")
+            .unwrap();
+        let on_repost = label(&repost.to_string(), "spam", "2026-11-14T08:00:00.000Z");
+        assert_eq!(hidden_record_of(&on_repost), Some(repost.clone()));
+        assert_eq!(hidden_record_of(&on_post), Some(post.clone()));
+        assert_eq!(hidden_post_of(&on_repost), None);
+        assert!(can_view_label(
+            Some(ALICE),
+            &on_repost,
+            Some(&state),
+            &none,
+            &c
+        ));
+        assert!(!can_view_label(
+            Some(CAROL),
+            &on_repost,
+            Some(&state),
+            &none,
+            &c
+        ));
+        assert!(!can_view_label(Some(ALICE), &on_repost, None, &none, &c));
+        assert!(!can_view_label(
+            Some(ALICE),
+            &on_repost,
+            Some(&other),
+            &none,
+            &c
+        ));
+        // Once Bob, the reposter, leaves, the label on his repost hides too.
+        let mut left = state.clone();
+        left.members = Default::default();
+        assert!(!can_view_label(
+            Some(ALICE),
+            &on_repost,
+            Some(&left),
+            &none,
+            &c
+        ));
         // A label that slipped past validation, on a like: never shown.
         let like = space
             .record(BOB, umbrae_lexicons::LIKE, "3mbaaaaaaaaa3")

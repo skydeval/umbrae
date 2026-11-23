@@ -22,7 +22,7 @@
           "uri": {
             "type": "string",
             "format": "uri",
-            "description": "What's labelled: the AT URI of a public record or account, an account DID, or the URI of a hidden post (a tools.umbrae.post in a tools.umbrae.space space). Nothing else from inside a space. A label on a hidden post is shown only to viewers who may see that post."
+            "description": "What's labelled: the AT URI of a public record or account, an account DID, or the URI of a hidden post or repost (a tools.umbrae.post or tools.umbrae.repost in a tools.umbrae.space space). Nothing else from inside a space. A label on a hidden post or repost is shown only to viewers who may see that record."
           },
           "cid": {
             "type": "string",
@@ -51,7 +51,7 @@
           "audience": {
             "type": "string",
             "format": "tid",
-            "description": "The record key of a tools.umbrae.labelerAudience: the label is shown only to its members (and, on a hidden post, only to those who may also see the post). Unknown means shown to nobody. Covered by sig when set."
+            "description": "The record key of a tools.umbrae.labelerAudience: the label is shown only to its members (and, on a hidden post or repost, only to those who may also see it). Unknown means shown to nobody. Covered by sig when set."
           },
           "sig": {
             "type": "bytes",

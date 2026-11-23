@@ -16,7 +16,7 @@
 use crate::validate::{is_datetime, is_language, string, Invalid, PublicUri};
 use crate::{
     LABEL, LABELER_AUDIENCE, LABELER_POLICIES, LABELER_PROFILE, LABELER_REASONS,
-    LABELER_SPACE_TYPE, POST, SELF_RKEY, SPACE_TYPE,
+    LABELER_SPACE_TYPE, POST, REPOST, SELF_RKEY, SPACE_TYPE,
 };
 use std::collections::BTreeMap;
 use umbrae_core::cid::Cid;
@@ -138,6 +138,9 @@ pub enum LabelSubject {
     Record(PublicUri),
     /// A hidden post. Show the label only to viewers who may see the post.
     HiddenPost(SpaceRecordUri),
+    /// A hidden repost: a `tools.umbrae.repost` in a `tools.umbrae.space`
+    /// space. Shown only to people who may see the repost.
+    HiddenRepost(SpaceRecordUri),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -215,8 +218,9 @@ pub fn is_public_subject(uri: &str) -> bool {
 }
 
 /// What a label's `uri` names, or `None` if it may not be labelled: a
-/// public subject, or a hidden post. A like, a group record, a space
-/// without a record, or anything in another space type isn't allowed.
+/// public subject, a hidden post, or a hidden repost. A like, a group
+/// record, a space without a record, or anything in another space type
+/// isn't allowed.
 pub fn label_subject(uri: &str) -> Option<LabelSubject> {
     if !is_space_uri(uri) {
         if is_valid_did(uri) {
@@ -229,8 +233,14 @@ pub fn label_subject(uri: &str) -> Option<LabelSubject> {
         };
     }
     let u = SpaceRecordUri::parse(uri).ok()?;
-    (u.space().space_type() == SPACE_TYPE && u.collection() == POST)
-        .then_some(LabelSubject::HiddenPost(u))
+    if u.space().space_type() != SPACE_TYPE {
+        return None;
+    }
+    match u.collection() {
+        POST => Some(LabelSubject::HiddenPost(u)),
+        REPOST => Some(LabelSubject::HiddenRepost(u)),
+        _ => None,
+    }
 }
 
 fn label(m: &Map, authority: &str) -> Result<Label, Invalid> {
@@ -719,6 +729,19 @@ mod tests {
             &label_with(&[("uri", t(&post.to_string()))])
         )
         .is_ok());
+        let repost = group.record(BOB, "tools.umbrae.repost", RKEY).unwrap();
+        assert_eq!(
+            label_subject(&repost.to_string()),
+            Some(LabelSubject::HiddenRepost(repost.clone()))
+        );
+        assert!(check(
+            LABEL,
+            LABELER,
+            RKEY,
+            &label_with(&[("uri", t(&repost.to_string()))])
+        )
+        .is_ok());
+        assert!(!is_public_subject(&repost.to_string()));
         let like = group.record(BOB, "tools.umbrae.like", RKEY).unwrap();
         let group_rec = group.record(BOB, "tools.umbrae.group", "self").unwrap();
         let elsewhere = SpaceRef::new(BOB, "com.example.space", "x")

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-23
+
+### Added
+- Labels on hidden reposts: `LabelSubject::HiddenRepost`, accepted by `label_subject` and `validate_labeler_record`. `can_view_label` shows them only to people who may see the repost.
+- `hidden_record_of`, which returns the hidden post or repost a label is on.
+
 ## [0.4.2] - 2026-11-20
 
 ### Added
@@ -107,7 +113,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/skydeval/umbrae/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/skydeval/umbrae/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/skydeval/umbrae/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/skydeval/umbrae/compare/v0.3.0...v0.4.0
