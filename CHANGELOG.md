@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [0.4.3] - 2026-11-23
 
 ### Added
-- Labels on hidden reposts: `LabelSubject::HiddenRepost`, accepted by `label_subject` and `validate_labeler_record`. `can_view_label` shows them only to people who may see the repost.
+- Labels on hidden reposts: `LabelSubject::HiddenRepost`, accepted by `label_subject` and `validate_labeler_record`. `can_view_repost_label` shows them only to people who may see the repost and the post it reposts; `can_view_label`, which can't see that post, never shows them.
 - `hidden_record_of`, which returns the hidden post or repost a label is on.
 
 ## [0.4.2] - 2026-11-20

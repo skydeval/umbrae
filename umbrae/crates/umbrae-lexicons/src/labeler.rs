@@ -752,11 +752,22 @@ mod tests {
             .unwrap()
             .record(LABELER, "tools.umbrae.post", RKEY)
             .unwrap();
+        // A repost outside a tools.umbrae.space space is no better.
+        let repost_elsewhere = SpaceRef::new(BOB, "com.example.space", "x")
+            .unwrap()
+            .record(BOB, "tools.umbrae.repost", RKEY)
+            .unwrap();
+        let repost_labeler = SpaceRef::new(LABELER, LABELER_SPACE_TYPE, "self")
+            .unwrap()
+            .record(LABELER, "tools.umbrae.repost", RKEY)
+            .unwrap();
         for bad in [
             like.to_string(),
             group_rec.to_string(),
             elsewhere.to_string(),
             labeler_rec.to_string(),
+            repost_elsewhere.to_string(),
+            repost_labeler.to_string(),
             group.to_string(),
         ] {
             assert_eq!(label_subject(&bad), None, "{bad}");

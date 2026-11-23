@@ -20,9 +20,11 @@
 //! Who sees a label ([`can_view_label`]): everyone the serving app shows
 //! the labeler to, unless the label names an audience (then only its
 //! members, from [`Audiences`]) or is on a hidden post (then only those
-//! who may see the post). Both apply when both are set.
+//! who may see the post). Both apply when both are set. A label on a
+//! hidden repost goes through [`can_view_repost_label`], which also needs
+//! the post it reposts.
 
-use crate::access::{can_view_record, SpaceState, ViewContext};
+use crate::access::{can_view_record, can_view_repost, SpaceState, ViewContext};
 use crate::space::Misconfigured;
 use std::collections::{BTreeMap, BTreeSet};
 use umbrae_core::didkey::{self, AnyKey};
@@ -176,11 +178,10 @@ impl Audiences {
 ///   `audiences`; an unknown audience, nobody. That includes the labeler
 ///   itself unless it lists its own DID.
 /// - On an account or a public record: no further condition.
-/// - On a hidden post or repost: also only if they may see that record.
-///   `post_space` is the state of its space ([`hidden_record_of`]); without
-///   it, no (fail closed). A serving app shows a repost only while its
-///   subject is visible too ([`crate::access::can_view_repost`]), so a label
-///   on a repost rides on that.
+/// - On a hidden post: also only if they may see that post. `post_space` is
+///   the state of the post's space; without it, no (fail closed).
+/// - On a hidden repost: no. Seeing a repost needs its subject too, which
+///   the label doesn't carry; use [`can_view_repost_label`].
 /// - On anything else: no.
 pub fn can_view_label(
     viewer: Option<&str>,
@@ -189,17 +190,48 @@ pub fn can_view_label(
     audiences: &Audiences,
     ctx: &impl ViewContext,
 ) -> bool {
-    if let Some(a) = &label.audience {
-        if !viewer.is_some_and(|v| audiences.allows(&label.src, a, v)) {
-            return false;
-        }
+    if !audience_allows(viewer, label, audiences) {
+        return false;
     }
     match label_subject(&label.uri) {
         Some(LabelSubject::Account(_) | LabelSubject::Record(_)) => true,
-        Some(LabelSubject::HiddenPost(uri) | LabelSubject::HiddenRepost(uri)) => {
+        Some(LabelSubject::HiddenPost(uri)) => {
             post_space.is_some_and(|s| can_view_record(viewer, &uri, s, ctx))
         }
         _ => false,
+    }
+}
+
+/// Whether `viewer` may see `label`, a label on a hidden repost whose
+/// `subject` is the post it reposts (from the repost record). As
+/// [`can_view_label`] for the audience, and only if they may see the
+/// repost **and** its subject ([`can_view_repost`]), in `space`, the
+/// repost's space ([`hidden_record_of`]). Without it, no. A label on
+/// anything but a hidden repost: no.
+pub fn can_view_repost_label(
+    viewer: Option<&str>,
+    label: &Label,
+    subject: &SpaceRecordUri,
+    space: Option<&SpaceState>,
+    audiences: &Audiences,
+    ctx: &impl ViewContext,
+) -> bool {
+    if !audience_allows(viewer, label, audiences) {
+        return false;
+    }
+    match label_subject(&label.uri) {
+        Some(LabelSubject::HiddenRepost(repost)) => {
+            space.is_some_and(|s| can_view_repost(viewer, &repost, subject, s, ctx))
+        }
+        _ => false,
+    }
+}
+
+/// A label without an audience is open; with one, only its members.
+fn audience_allows(viewer: Option<&str>, label: &Label, audiences: &Audiences) -> bool {
+    match &label.audience {
+        Some(a) => viewer.is_some_and(|v| audiences.allows(&label.src, a, v)),
+        None => true,
     }
 }
 
@@ -665,46 +697,6 @@ mod tests {
         ));
         // Public subjects are as visible as the labeler.
         assert!(can_view_label(Some(CAROL), &on_public, None, &none, &c));
-        // A hidden repost, like a post: only those who may see it.
-        let repost = space
-            .record(BOB, umbrae_lexicons::REPOST, "3mbaaaaaaaaa4")
-            .unwrap();
-        let on_repost = label(&repost.to_string(), "spam", "2026-11-14T08:00:00.000Z");
-        assert_eq!(hidden_record_of(&on_repost), Some(repost.clone()));
-        assert_eq!(hidden_record_of(&on_post), Some(post.clone()));
-        assert_eq!(hidden_post_of(&on_repost), None);
-        assert!(can_view_label(
-            Some(ALICE),
-            &on_repost,
-            Some(&state),
-            &none,
-            &c
-        ));
-        assert!(!can_view_label(
-            Some(CAROL),
-            &on_repost,
-            Some(&state),
-            &none,
-            &c
-        ));
-        assert!(!can_view_label(Some(ALICE), &on_repost, None, &none, &c));
-        assert!(!can_view_label(
-            Some(ALICE),
-            &on_repost,
-            Some(&other),
-            &none,
-            &c
-        ));
-        // Once Bob, the reposter, leaves, the label on his repost hides too.
-        let mut left = state.clone();
-        left.members = Default::default();
-        assert!(!can_view_label(
-            Some(ALICE),
-            &on_repost,
-            Some(&left),
-            &none,
-            &c
-        ));
         // A label that slipped past validation, on a like: never shown.
         let like = space
             .record(BOB, umbrae_lexicons::LIKE, "3mbaaaaaaaaa3")
@@ -716,6 +708,138 @@ mod tests {
             Some(&state),
             &none,
             &c
+        ));
+    }
+
+    /// Everyone active; `pairs` block each other.
+    struct Blocks(&'static [(&'static str, &'static str)]);
+
+    impl ViewContext for Blocks {
+        fn is_active(&self, _: &str) -> crate::Tri {
+            crate::Tri::Yes
+        }
+
+        fn blocked(&self, a: &str, b: &str) -> crate::Tri {
+            if self
+                .0
+                .iter()
+                .any(|&(x, y)| (x == a && y == b) || (x == b && y == a))
+            {
+                crate::Tri::Yes
+            } else {
+                crate::Tri::No
+            }
+        }
+    }
+
+    #[test]
+    fn labels_on_hidden_reposts_follow_the_repost_and_its_post() {
+        const ALICE: &str = "did:plc:aliceaaaaaaaaaaaaaaaaaaa";
+        const BOB: &str = "did:plc:bobbbbbbbbbbbbbbbbbbbbbb";
+        const CAROL: &str = "did:plc:carolcccccccccccccccccccc";
+        const DAVE: &str = "did:plc:davedddddddddddddddddddddd";
+        const EVE: &str = "did:plc:eveeeeeeeeeeeeeeeeeeeeeee";
+        let rw = MemberAccess {
+            read: true,
+            write: true,
+        };
+        let space = crate::space::group_space(ALICE, "3mbbbbbbbbbb2").unwrap();
+        let mut state = SpaceState::new(space.clone(), Some(crate::space::group_policy(None)));
+        state.members.insert(BOB, rw);
+        state.members.insert(DAVE, rw);
+        state.members.insert(EVE, rw);
+        // Eve posts; Bob reposts it.
+        let post = space
+            .record(EVE, umbrae_lexicons::POST, "3mbaaaaaaaaa2")
+            .unwrap();
+        let repost = space
+            .record(BOB, umbrae_lexicons::REPOST, "3mbaaaaaaaaa4")
+            .unwrap();
+        let on_post = label(&post.to_string(), "spam", "2026-11-14T08:00:00.000Z");
+        let on_repost = label(&repost.to_string(), "spam", "2026-11-14T08:00:00.000Z");
+        let c = Everyone;
+        let none = Audiences::default();
+        let sees = |viewer: Option<&str>, s: Option<&SpaceState>, ctx: &Blocks| {
+            can_view_repost_label(viewer, &on_repost, &post, s, &none, ctx)
+        };
+        let open = Blocks(&[]);
+
+        assert_eq!(hidden_record_of(&on_repost), Some(repost.clone()));
+        assert_eq!(hidden_record_of(&on_post), Some(post.clone()));
+        assert_eq!(hidden_post_of(&on_repost), None);
+        // Members who may see the repost and the post see the label.
+        assert!(sees(Some(ALICE), Some(&state), &open));
+        assert!(sees(Some(DAVE), Some(&state), &open));
+        assert!(!sees(Some(CAROL), Some(&state), &open));
+        assert!(!sees(None, Some(&state), &open));
+        // Without the repost's space state, or another space's: hidden,
+        // even where the viewer and the reposter both belong.
+        assert!(!sees(Some(DAVE), None, &open));
+        let mut other = SpaceState::new(
+            crate::space::group_space(ALICE, "3mbbbbbbbbbb3").unwrap(),
+            Some(crate::space::group_policy(None)),
+        );
+        other.members.insert(BOB, rw);
+        other.members.insert(DAVE, rw);
+        other.members.insert(EVE, rw);
+        assert!(!sees(Some(DAVE), Some(&other), &open));
+        // Dave may see Bob's repost but not Eve's post: no label.
+        let dave_eve = Blocks(&[(DAVE, EVE)]);
+        assert!(can_view_record(Some(DAVE), &repost, &state, &dave_eve));
+        assert!(!sees(Some(DAVE), Some(&state), &dave_eve));
+        // Nor once Eve leaves: Bob's repost stays, her post drops out.
+        let mut eve_left = SpaceState::new(space.clone(), Some(crate::space::group_policy(None)));
+        eve_left.members.insert(BOB, rw);
+        eve_left.members.insert(DAVE, rw);
+        assert!(can_view_record(Some(DAVE), &repost, &eve_left, &open));
+        assert!(!sees(Some(DAVE), Some(&eve_left), &open));
+        // Nor if Dave blocks Bob, the reposter.
+        assert!(!sees(Some(DAVE), Some(&state), &Blocks(&[(DAVE, BOB)])));
+        // Once Bob leaves, the label on his repost hides too.
+        let mut left = SpaceState::new(space.clone(), Some(crate::space::group_policy(None)));
+        left.members.insert(DAVE, rw);
+        left.members.insert(EVE, rw);
+        assert!(!sees(Some(DAVE), Some(&left), &open));
+        // A subject in another space: never.
+        let elsewhere = other
+            .space
+            .record(ALICE, umbrae_lexicons::POST, "3mbaaaaaaaaa2")
+            .unwrap();
+        assert!(!can_view_repost_label(
+            Some(DAVE),
+            &on_repost,
+            &elsewhere,
+            Some(&state),
+            &none,
+            &open
+        ));
+        // An audience still applies.
+        let mut restricted = on_repost.clone();
+        restricted.audience = Some("3mbaaaaaaaaa9".into());
+        assert!(!can_view_repost_label(
+            Some(DAVE),
+            &restricted,
+            &post,
+            Some(&state),
+            &none,
+            &open
+        ));
+        // can_view_label can't see the subject, so it never shows a repost
+        // label; can_view_repost_label shows nothing else.
+        assert!(!can_view_label(
+            Some(DAVE),
+            &on_repost,
+            Some(&state),
+            &none,
+            &c
+        ));
+        assert!(!can_view_repost_label(
+            Some(DAVE),
+            &on_post,
+            &post,
+            Some(&state),
+            &none,
+            &open
         ));
     }
 
