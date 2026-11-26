@@ -1,0 +1,47 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.community.declaration",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A community's public declaration, in the community account's PUBLIC repo at key self, so a client that has only the community's DID can find the app to call. The community space's policy isn't readable before joining. It says that the community exists and who manages it, never who its members are or what they post. A community with no declaration is unlisted: clients learn its managing app from an invite instead. The managing app answers CommunityNotFound for a community it doesn't manage, so a wrong declaration fails closed.",
+      "key": "literal:self",
+      "record": {
+        "type": "object",
+        "required": [
+          "managingApp",
+          "createdAt"
+        ],
+        "properties": {
+          "managingApp": {
+            "type": "string",
+            "maxLength": 2048,
+            "description": "The did#serviceId the community space's policy names: where tools.umbrae.community.* is served, and the atproto-proxy value for calling it."
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 640,
+            "maxGraphemes": 64
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 3000,
+            "maxGraphemes": 300
+          },
+          "avatar": {
+            "type": "blob",
+            "accept": [
+              "image/png",
+              "image/jpeg"
+            ],
+            "maxSize": 1000000
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

@@ -38,7 +38,10 @@ mod migrate;
 mod social;
 mod validate;
 
-pub use community::{Feed, ListSubscription, MAX_FEEDS_PER_POST, MAX_FEED_AUTHORS};
+pub use community::{
+    validate_community_declaration, CommunityDeclaration, Feed, ListSubscription,
+    MAX_FEEDS_PER_POST, MAX_FEED_AUTHORS,
+};
 pub use migrate::upgrade_space_uris;
 
 pub use labeler::{
@@ -83,6 +86,9 @@ pub const COMMUNITY_LIST_MEMBERS: &str = "tools.umbrae.community.listMembers";
 pub const COMMUNITY_DECIDE: &str = "tools.umbrae.community.decide";
 pub const COMMUNITY_INVITE: &str = "tools.umbrae.community.invite";
 pub const COMMUNITY_REMOVE: &str = "tools.umbrae.community.remove";
+/// A community's public declaration of its managing app, at `self` in its
+/// public repo.
+pub const COMMUNITY_DECLARATION: &str = "tools.umbrae.community.declaration";
 /// The followers space's key: a private account's approved followers.
 pub const FOLLOWERS_SKEY: &str = "followers";
 /// A community's space key: the space whose authority is the community's
@@ -197,6 +203,10 @@ pub const LEXICONS: &[(&str, &str)] = &[
     (
         COMMUNITY_REMOVE,
         include_str!("../lexicons/tools/umbrae/community/remove.json"),
+    ),
+    (
+        COMMUNITY_DECLARATION,
+        include_str!("../lexicons/tools/umbrae/community/declaration.json"),
     ),
 ];
 

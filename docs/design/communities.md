@@ -14,6 +14,13 @@ A community is a `tools.umbrae.space` space with the key `community` (`community
 
 Every rule for groups applies unchanged inside a community: posts, replies, likes, reposts, quotes, gates and labels on hidden posts. Each member writes into their own repo in the community space, so their posts move with their account.
 
+## Finding a community's managing app
+
+A space's policy is readable only with a space credential, so someone who isn't a member yet can't read it. Instead:
+- **Listed communities:** the community account writes `tools.umbrae.community.declaration` at `self` in its **public** repo, with `{managingApp, name?, description?, avatar?, createdAt}`. Anyone reads it with `com.atproto.repo.getRecord`, then calls `tools.umbrae.community.*` through their PDS with `atproto-proxy: <managingApp>`. It says the community exists and who manages it, never who its members are or what they post.
+- **Unlisted communities:** they have no declaration. The invite link carries the managing app.
+- **Trust:** only the community account can write its declaration. A managing app answers `CommunityNotFound` for a community whose space policy doesn't name it, so a wrong pointer fails closed.
+
 ## Membership methods
 
 A community's managing app serves `tools.umbrae.community.*` at the `#umbrae_app` endpoint its space policy names:

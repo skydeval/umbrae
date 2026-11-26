@@ -48,6 +48,51 @@ pub struct ListSubscription {
     pub created_at: String,
 }
 
+/// A community's public declaration: which app manages it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CommunityDeclaration {
+    /// The `did#serviceId` to call `tools.umbrae.community.*` on, and to
+    /// put in `atproto-proxy`.
+    pub managing_app: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub avatar: Option<BlobRef>,
+    pub created_at: String,
+}
+
+/// Validate a `tools.umbrae.community.declaration`, read from the
+/// community account's **public** repo at `self`. It names no hidden
+/// record. Its `managingApp` is only a pointer: the app itself answers
+/// `CommunityNotFound` for a community it doesn't manage.
+pub fn validate_community_declaration(m: &Map) -> Result<CommunityDeclaration, Invalid> {
+    match m.get("$type") {
+        Some(Value::Text(t)) if t == crate::COMMUNITY_DECLARATION => {}
+        _ => return Err(Invalid("$type must be tools.umbrae.community.declaration")),
+    }
+    if mentions_space_uri(&Value::Map(m.clone())) {
+        return Err(Invalid("a public declaration names no hidden record"));
+    }
+    let app = string(m, "managingApp", 1, 2048, 2048)?.ok_or(Invalid("managingApp is required"))?;
+    let ok = app.split_once('#').is_some_and(|(did, id)| {
+        is_valid_did(did)
+            && !id.is_empty()
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'~'))
+    });
+    if !ok {
+        return Err(Invalid("managingApp must be a did#serviceId reference"));
+    }
+    Ok(CommunityDeclaration {
+        managing_app: app,
+        name: string(m, "name", 0, 640, 64)?,
+        description: string(m, "description", 0, 3000, 300)?,
+        avatar: blob(m.get("avatar"))?,
+        created_at: datetime(m, "createdAt")?,
+    })
+}
+
 pub(crate) fn feed(m: &Map, uri: &SpaceRecordUri) -> Result<Feed, Invalid> {
     if uri.space().skey() != COMMUNITY_SKEY {
         return Err(Invalid("a feed lives only in a community space"));
@@ -210,6 +255,35 @@ mod tests {
         assert!(validate_record(&post, &a_post(vec![sref(&a_post_ref)])).is_err());
         assert!(validate_record(&post, &a_post(vec![sref(&feed); 4])).is_err());
         assert!(validate_record(&post, &a_post(vec![sref(&feed); 3])).is_ok());
+    }
+
+    #[test]
+    fn community_declarations() {
+        let d = map(&[
+            ("$type", t(crate::COMMUNITY_DECLARATION)),
+            ("managingApp", t("did:web:app.example#umbrae_app")),
+            ("name", t("Horizon")),
+            ("createdAt", t(NOW)),
+        ]);
+        let ok = validate_community_declaration(&d).unwrap();
+        assert_eq!(ok.managing_app, "did:web:app.example#umbrae_app");
+        for (k, v) in [
+            ("managingApp", "did:web:app.example"),
+            ("managingApp", "https://app.example#x"),
+            ("managingApp", "did:web:app.example#"),
+            ("$type", "tools.umbrae.feed"),
+            (
+                "description",
+                "at:space/did:plc:abc/tools.umbrae.space/community",
+            ),
+        ] {
+            let mut bad = d.clone();
+            bad.insert(k.into(), t(v));
+            assert!(validate_community_declaration(&bad).is_err(), "{k}={v}");
+        }
+        let mut no_app = d.clone();
+        no_app.remove("managingApp");
+        assert!(validate_community_declaration(&no_app).is_err());
     }
 
     #[test]

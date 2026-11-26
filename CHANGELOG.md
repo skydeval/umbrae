@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-26
+
+### Added
+- `tools.umbrae.community.declaration`: a community's public record, at `self` in the community account's public repo, naming its `managingApp`. A client that has only the community's DID reads it with `com.atproto.repo.getRecord` to learn where to call `tools.umbrae.community.*`, since the space policy isn't readable before joining. A community without one is unlisted, and invites carry the managing app instead.
+- `validate_community_declaration`, `CommunityDeclaration` and `COMMUNITY_DECLARATION`.
+
 ## [0.7.1] - 2026-11-26
 
 ### Added
@@ -169,7 +175,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/skydeval/umbrae/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/skydeval/umbrae/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/skydeval/umbrae/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/skydeval/umbrae/compare/v0.5.0...v0.6.0
