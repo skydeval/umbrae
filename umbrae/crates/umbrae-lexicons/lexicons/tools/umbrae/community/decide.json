@@ -1,0 +1,71 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.community.decide",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Accept or refuse a join request. Moderators only: the community account and the accounts its managing app names. Served by the managing app named in the community space's policy, at its #umbrae_app endpoint, with atproto service auth (iss the caller, aud the managing app, lxm this method); clients call through their PDS with atproto-proxy set to the policy's managingApp. Any managing app may serve it: a serving app, or a PDS that manages its own communities.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "community",
+            "did",
+            "accept"
+          ],
+          "properties": {
+            "community": {
+              "type": "string",
+              "format": "did",
+              "description": "The community account's DID."
+            },
+            "did": {
+              "type": "string",
+              "format": "did"
+            },
+            "accept": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "state"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "knownValues": [
+                "member",
+                "none"
+              ]
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "CommunityNotFound",
+          "description": "Not a community this managing app manages."
+        },
+        {
+          "name": "NotAllowed",
+          "description": "The caller lacks the role this needs."
+        },
+        {
+          "name": "NotAdmitted",
+          "description": "The managing app doesn't admit this account."
+        },
+        {
+          "name": "NoRequest",
+          "description": "That account hasn't asked to join."
+        }
+      ]
+    }
+  }
+}

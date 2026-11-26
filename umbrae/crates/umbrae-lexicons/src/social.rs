@@ -370,8 +370,8 @@ fn no_hidden(m: &Map) -> Result<(), Invalid> {
 mod tests {
     use super::*;
     use crate::{
-        validate_record, Record, EVERYONE_SKEY, FOLLOW, FOLLOWERS_SKEY, POSTGATE, PROFILE, SPACE_TYPE,
-        THREADGATE,
+        validate_record, Record, EVERYONE_SKEY, FOLLOW, FOLLOWERS_SKEY, POSTGATE, PROFILE,
+        SPACE_TYPE, THREADGATE,
     };
     use umbrae_core::cid::Cid;
 

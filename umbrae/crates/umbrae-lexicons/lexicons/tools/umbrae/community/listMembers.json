@@ -1,0 +1,115 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.community.listMembers",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "A community's members, requests, invitations or removals. Moderators only: the community account and the accounts its managing app names. Served by the managing app named in the community space's policy, at its #umbrae_app endpoint, with atproto service auth (iss the caller, aud the managing app, lxm this method); clients call through their PDS with atproto-proxy set to the policy's managingApp. Any managing app may serve it: a serving app, or a PDS that manages its own communities.",
+      "parameters": {
+        "type": "params",
+        "required": [
+          "community"
+        ],
+        "properties": {
+          "community": {
+            "type": "string",
+            "format": "did",
+            "description": "The community account's DID."
+          },
+          "state": {
+            "type": "string",
+            "knownValues": [
+              "member",
+              "requested",
+              "invited",
+              "removed"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50
+          },
+          "cursor": {
+            "type": "string"
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "members"
+          ],
+          "properties": {
+            "members": {
+              "type": "array",
+              "items": {
+                "type": "ref",
+                "ref": "#member"
+              }
+            },
+            "cursor": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "CommunityNotFound",
+          "description": "Not a community this managing app manages."
+        },
+        {
+          "name": "NotAllowed",
+          "description": "The caller lacks the role this needs."
+        },
+        {
+          "name": "NotAdmitted",
+          "description": "The managing app doesn't admit this account."
+        }
+      ]
+    },
+    "member": {
+      "type": "object",
+      "required": [
+        "did",
+        "role",
+        "state",
+        "since"
+      ],
+      "properties": {
+        "did": {
+          "type": "string",
+          "format": "did"
+        },
+        "handle": {
+          "type": "string",
+          "format": "handle"
+        },
+        "role": {
+          "type": "string",
+          "knownValues": [
+            "member",
+            "moderator"
+          ]
+        },
+        "state": {
+          "type": "string",
+          "knownValues": [
+            "member",
+            "requested",
+            "invited",
+            "removed"
+          ]
+        },
+        "since": {
+          "type": "string",
+          "format": "datetime"
+        }
+      }
+    }
+  }
+}

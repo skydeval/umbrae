@@ -1,0 +1,114 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.community.getCommunity",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "A community's details and the caller's standing in it. Served by the managing app named in the community space's policy, at its #umbrae_app endpoint, with atproto service auth (iss the caller, aud the managing app, lxm this method); clients call through their PDS with atproto-proxy set to the policy's managingApp. Any managing app may serve it: a serving app, or a PDS that manages its own communities.",
+      "parameters": {
+        "type": "params",
+        "required": [
+          "community"
+        ],
+        "properties": {
+          "community": {
+            "type": "string",
+            "format": "did",
+            "description": "The community account's DID."
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "did",
+            "space",
+            "handle",
+            "name",
+            "managingApp",
+            "joinMode",
+            "viewer"
+          ],
+          "properties": {
+            "did": {
+              "type": "string",
+              "format": "did"
+            },
+            "space": {
+              "type": "string",
+              "format": "space-ref",
+              "description": "The community space: at:space/{did}/tools.umbrae.space/community."
+            },
+            "handle": {
+              "type": "string",
+              "format": "handle"
+            },
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "managingApp": {
+              "type": "string",
+              "description": "The did#serviceId the space policy names."
+            },
+            "joinMode": {
+              "type": "string",
+              "knownValues": [
+                "open",
+                "request",
+                "invite"
+              ]
+            },
+            "viewer": {
+              "type": "ref",
+              "ref": "#viewerState"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "CommunityNotFound",
+          "description": "Not a community this managing app manages."
+        },
+        {
+          "name": "NotAllowed",
+          "description": "The caller lacks the role this needs."
+        },
+        {
+          "name": "NotAdmitted",
+          "description": "The managing app doesn't admit this account."
+        }
+      ]
+    },
+    "viewerState": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "type": "string",
+          "knownValues": [
+            "none",
+            "requested",
+            "invited",
+            "member",
+            "removed"
+          ]
+        },
+        "role": {
+          "type": "string",
+          "knownValues": [
+            "member",
+            "moderator"
+          ]
+        }
+      }
+    }
+  }
+}

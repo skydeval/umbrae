@@ -12,7 +12,9 @@
 //!   space, naming a `tools.umbrae.list` in any Umbrae space.
 
 use crate::labeler::{blob, BlobRef};
-use crate::validate::{datetime, mentions_space_uri, string, strong_ref, Invalid, StrongRef, Target};
+use crate::validate::{
+    datetime, mentions_space_uri, string, strong_ref, Invalid, StrongRef, Target,
+};
 use crate::{COMMUNITY_SKEY, LIST, SELF_RKEY, SPACE_TYPE};
 use std::collections::BTreeMap;
 use umbrae_core::drisl::Value;
@@ -85,7 +87,9 @@ pub(crate) fn list_subscription(
     let mut rest = m.clone();
     rest.remove("list");
     if mentions_space_uri(&Value::Map(rest)) {
-        return Err(Invalid("a list subscription names a hidden record only in list"));
+        return Err(Invalid(
+            "a list subscription names a hidden record only in list",
+        ));
     }
     let list = strong_ref(m.get("list"))?;
     match &list.target {

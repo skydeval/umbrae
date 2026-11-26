@@ -174,7 +174,10 @@ mod tests {
     /// A community whose managing app says Alice and Bob are members, and
     /// Carol isn't.
     fn community() -> SpaceState {
-        let mut s = SpaceState::new(community_space(COMMUNITY).unwrap(), Some(managed_policy(APP)));
+        let mut s = SpaceState::new(
+            community_space(COMMUNITY).unwrap(),
+            Some(managed_policy(APP)),
+        );
         let mut m = Members::default();
         m.insert(ALICE, rw(true, true));
         m.insert(BOB, rw(true, true));
@@ -216,7 +219,10 @@ mod tests {
         let v = map(&[
             ("$type", t(POST)),
             ("text", t("hi")),
-            ("feeds", Value::Array(feeds.iter().map(|f| sref(f)).collect())),
+            (
+                "feeds",
+                Value::Array(feeds.iter().map(|f| sref(f)).collect()),
+            ),
             ("createdAt", t("2026-11-26T10:00:00Z")),
         ]);
         match validate_record(&uri, &v) {
@@ -233,7 +239,10 @@ mod tests {
         let v = map(&[
             ("$type", t(FEED)),
             ("name", t("Art")),
-            ("authors", Value::Array(authors.iter().map(|a| t(a)).collect())),
+            (
+                "authors",
+                Value::Array(authors.iter().map(|a| t(a)).collect()),
+            ),
             ("createdAt", t("2026-11-26T10:00:00Z")),
         ]);
         match validate_record(&uri, &v) {
@@ -247,8 +256,24 @@ mod tests {
         let c = community();
         let (feed_uri, feed) = a_feed(&[BOB]);
         let (post_uri, post) = post_in(&[&feed_uri], BOB);
-        assert!(can_view_feed_post(Some(ALICE), &post_uri, &post, &feed_uri, &feed, &c, &Ctx));
-        assert!(!can_view_feed_post(Some(CAROL), &post_uri, &post, &feed_uri, &feed, &c, &Ctx));
+        assert!(can_view_feed_post(
+            Some(ALICE),
+            &post_uri,
+            &post,
+            &feed_uri,
+            &feed,
+            &c,
+            &Ctx
+        ));
+        assert!(!can_view_feed_post(
+            Some(CAROL),
+            &post_uri,
+            &post,
+            &feed_uri,
+            &feed,
+            &c,
+            &Ctx
+        ));
         // Off the author list: out of the feed.
         let (_, without_bob) = a_feed(&[ALICE]);
         assert!(!can_view_feed_post(
@@ -262,7 +287,15 @@ mod tests {
         ));
         // A post that wasn't sent to it isn't in it.
         let (other_uri, other) = post_in(&[], BOB);
-        assert!(!can_view_feed_post(Some(ALICE), &other_uri, &other, &feed_uri, &feed, &c, &Ctx));
+        assert!(!can_view_feed_post(
+            Some(ALICE),
+            &other_uri,
+            &other,
+            &feed_uri,
+            &feed,
+            &c,
+            &Ctx
+        ));
     }
 
     fn profile_at(space: &SpaceRef, author: &str, updated: &str) -> (SpaceRecordUri, Profile) {
@@ -289,9 +322,21 @@ mod tests {
 
     #[test]
     fn the_narrowest_profile_copy_wins() {
-        let group = member_state(group_space(ALICE, GROUP).unwrap(), group_policy(None), &[BOB]);
-        let followers = member_state(followers_space(ALICE).unwrap(), group_policy(None), &[BOB, CAROL]);
-        let everyone = member_state(everyone_space(ALICE).unwrap(), managed_policy(APP), &[BOB, CAROL]);
+        let group = member_state(
+            group_space(ALICE, GROUP).unwrap(),
+            group_policy(None),
+            &[BOB],
+        );
+        let followers = member_state(
+            followers_space(ALICE).unwrap(),
+            group_policy(None),
+            &[BOB, CAROL],
+        );
+        let everyone = member_state(
+            everyone_space(ALICE).unwrap(),
+            managed_policy(APP),
+            &[BOB, CAROL],
+        );
         let comm = community();
         let (gu, gp) = profile_at(&group.space, ALICE, "2026-11-26T10:00:00Z");
         let (fu, fp) = profile_at(&followers.space, ALICE, "2026-11-26T11:00:00Z");
@@ -299,31 +344,66 @@ mod tests {
         let (cu, cp) = profile_at(&comm.space, ALICE, "2026-11-26T12:00:00Z");
         let (bu, bp) = profile_at(&comm.space, BOB, "2026-11-26T12:00:00Z");
         let copies = [
-            ProfileCopy { uri: &eu, profile: &ep, state: &everyone },
-            ProfileCopy { uri: &cu, profile: &cp, state: &comm },
-            ProfileCopy { uri: &fu, profile: &fp, state: &followers },
-            ProfileCopy { uri: &gu, profile: &gp, state: &group },
-            ProfileCopy { uri: &bu, profile: &bp, state: &comm },
+            ProfileCopy {
+                uri: &eu,
+                profile: &ep,
+                state: &everyone,
+            },
+            ProfileCopy {
+                uri: &cu,
+                profile: &cp,
+                state: &comm,
+            },
+            ProfileCopy {
+                uri: &fu,
+                profile: &fp,
+                state: &followers,
+            },
+            ProfileCopy {
+                uri: &gu,
+                profile: &gp,
+                state: &group,
+            },
+            ProfileCopy {
+                uri: &bu,
+                profile: &bp,
+                state: &comm,
+            },
         ];
         // Bob is in the group: the group copy. Carol: followers. Someone in
         // none sees nothing.
         assert_eq!(profile_for_viewer(Some(BOB), ALICE, &copies, &Ctx), Some(3));
-        assert_eq!(profile_for_viewer(Some(CAROL), ALICE, &copies, &Ctx), Some(2));
+        assert_eq!(
+            profile_for_viewer(Some(CAROL), ALICE, &copies, &Ctx),
+            Some(2)
+        );
         assert_eq!(profile_for_viewer(None, ALICE, &copies, &Ctx), None);
         // Bob's own community copy is Bob's, never Alice's.
         assert_eq!(profile_for_viewer(Some(ALICE), BOB, &copies, &Ctx), Some(4));
         // Ties go to the latest change.
         let (fu2, fp2) = profile_at(&followers.space, ALICE, "2026-11-26T09:00:00Z");
         let tie = [
-            ProfileCopy { uri: &fu2, profile: &fp2, state: &followers },
-            ProfileCopy { uri: &fu, profile: &fp, state: &followers },
+            ProfileCopy {
+                uri: &fu2,
+                profile: &fp2,
+                state: &followers,
+            },
+            ProfileCopy {
+                uri: &fu,
+                profile: &fp,
+                state: &followers,
+            },
         ];
         assert_eq!(profile_for_viewer(Some(CAROL), ALICE, &tie, &Ctx), Some(1));
     }
 
     #[test]
     fn list_subscriptions_follow_the_list() {
-        let group = member_state(group_space(ALICE, GROUP).unwrap(), group_policy(None), &[BOB]);
+        let group = member_state(
+            group_space(ALICE, GROUP).unwrap(),
+            group_policy(None),
+            &[BOB],
+        );
         let list = group.space.record(ALICE, LIST, RKEY).unwrap();
         let only_me = SpaceState::new(only_me_space(BOB).unwrap(), Some(only_me_policy()));
         let uri = only_me.space.record(BOB, LIST_SUBSCRIPTION, RKEY2).unwrap();
@@ -335,11 +415,39 @@ mod tests {
         let Ok(Some(Record::ListSubscription(sub))) = validate_record(&uri, &v) else {
             panic!("subscription should validate");
         };
-        assert!(can_view_list_subscription(Some(BOB), &uri, &sub, &only_me, Some(&group), &Ctx));
-        assert!(!can_view_list_subscription(Some(ALICE), &uri, &sub, &only_me, Some(&group), &Ctx));
-        assert!(!can_view_list_subscription(Some(BOB), &uri, &sub, &only_me, None, &Ctx));
+        assert!(can_view_list_subscription(
+            Some(BOB),
+            &uri,
+            &sub,
+            &only_me,
+            Some(&group),
+            &Ctx
+        ));
+        assert!(!can_view_list_subscription(
+            Some(ALICE),
+            &uri,
+            &sub,
+            &only_me,
+            Some(&group),
+            &Ctx
+        ));
+        assert!(!can_view_list_subscription(
+            Some(BOB),
+            &uri,
+            &sub,
+            &only_me,
+            None,
+            &Ctx
+        ));
         let mut left = group.clone();
         left.members = Members::default();
-        assert!(!can_view_list_subscription(Some(BOB), &uri, &sub, &only_me, Some(&left), &Ctx));
+        assert!(!can_view_list_subscription(
+            Some(BOB),
+            &uri,
+            &sub,
+            &only_me,
+            Some(&left),
+            &Ctx
+        ));
     }
 }

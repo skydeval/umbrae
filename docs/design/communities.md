@@ -14,6 +14,25 @@ A community is a `tools.umbrae.space` space with the key `community` (`community
 
 Every rule for groups applies unchanged inside a community: posts, replies, likes, reposts, quotes, gates and labels on hidden posts. Each member writes into their own repo in the community space, so their posts move with their account.
 
+## Membership methods
+
+A community's managing app serves `tools.umbrae.community.*` at the `#umbrae_app` endpoint its space policy names:
+
+| Method | Kind | Who | What |
+|---|---|---|---|
+| `getCommunity` | query | anyone admitted | name, description, join mode (`open`, `request` or `invite`), and the caller's state and role |
+| `join` | procedure | the caller | join, ask to, or accept an invitation |
+| `leave` | procedure | the caller | leave, withdraw a request, or decline an invitation |
+| `listMembers` | query | moderators | members, requests, invitations or removals, paged |
+| `decide` | procedure | moderators | accept or refuse a request |
+| `invite` | procedure | moderators | invite an account; one that already asked becomes a member |
+| `remove` | procedure | moderators | end access at once and remove them as a writer |
+
+- **Auth:** atproto service auth. The client calls through its PDS with `atproto-proxy` set to the policy's `managingApp`, and the managing app checks `iss`, `aud` and `lxm`.
+- **Moderators:** the community account, plus the accounts the managing app names.
+- **Common errors:** `CommunityNotFound`, `NotAllowed`, `NotAdmitted`.
+- **Same calls everywhere:** a serving app and a PDS that manages its own communities answer the same methods, so clients don't depend on which one runs the community.
+
 ## Scale
 
 - **Membership:** the managing app keeps it, so no member list sits in a repo.

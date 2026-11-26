@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-26
+
+### Added
+- Community membership methods, `tools.umbrae.community.*`: `getCommunity`, `join`, `leave`, `listMembers`, `decide`, `invite` and `remove`.
+  - Any managing app serves them, at the `#umbrae_app` endpoint the space policy names, with atproto service auth. Clients call through their PDS with `atproto-proxy`.
+  - They're manager-neutral, so a serving app and a PDS that manages its own communities answer the same calls.
+- `COMMUNITY_GET`, `COMMUNITY_JOIN`, `COMMUNITY_LEAVE`, `COMMUNITY_LIST_MEMBERS`, `COMMUNITY_DECIDE`, `COMMUNITY_INVITE` and `COMMUNITY_REMOVE`.
+
 ## [0.7.0] - 2026-11-26
 
 ### Added
@@ -161,7 +169,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/skydeval/umbrae/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/skydeval/umbrae/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/skydeval/umbrae/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/skydeval/umbrae/compare/v0.4.3...v0.5.0

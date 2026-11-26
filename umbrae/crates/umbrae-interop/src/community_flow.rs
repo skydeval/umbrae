@@ -37,7 +37,11 @@ fn jwt_claims(token: &str) -> Value {
     token
         .split('.')
         .nth(1)
-        .and_then(|p| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(p).ok())
+        .and_then(|p| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(p)
+                .ok()
+        })
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or(Value::Null)
 }
@@ -67,7 +71,12 @@ pub(crate) fn handle(url: &str, authorization: Option<&str>) -> Option<(u16, Val
     if DOWN.load(Ordering::SeqCst) {
         return Some((500, json!({ "error": "InternalServerError" })));
     }
-    let (read, write) = ACCESS.lock().unwrap().get(&repo).copied().unwrap_or((false, false));
+    let (read, write) = ACCESS
+        .lock()
+        .unwrap()
+        .get(&repo)
+        .copied()
+        .unwrap_or((false, false));
     Some((200, json!({ "read": read, "write": write })))
 }
 
@@ -87,7 +96,13 @@ fn state(space: &umbrae_core::uri::SpaceRef, policy: Policy) -> SpaceState {
     let mut s = SpaceState::new(space.clone(), Some(policy));
     let mut m = Members::default();
     for (did, (read, write)) in ACCESS.lock().unwrap().iter() {
-        m.insert(did, MemberAccess { read: *read, write: *write });
+        m.insert(
+            did,
+            MemberAccess {
+                read: *read,
+                write: *write,
+            },
+        );
     }
     s.members = m;
     s
@@ -132,7 +147,11 @@ pub(crate) fn run(
     )?
     .ok("createSpace community")?;
     let got = pds
-        .get("com.atproto.space.getSpace", &[("space", &space_str)], &community.auth())?
+        .get(
+            "com.atproto.space.getSpace",
+            &[("space", &space_str)],
+            &community.auth(),
+        )?
         .ok("getSpace community")?
         .json();
     let stored = map(&got["policy"]).and_then(|m| Policy::from_map(&m).map_err(|e| e.to_string()));
@@ -262,7 +281,10 @@ pub(crate) fn run(
 
     // Bob is removed: the app says no, and the community drops him as a
     // writer. His posts leave the community.
-    ACCESS.lock().unwrap().insert(bob.did.clone(), (false, false));
+    ACCESS
+        .lock()
+        .unwrap()
+        .insert(bob.did.clone(), (false, false));
     pds.post(
         "com.atproto.space.removeWriter",
         &json!({ "space": space_str, "repo": bob.did }),

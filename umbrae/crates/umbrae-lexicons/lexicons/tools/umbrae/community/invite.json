@@ -1,0 +1,63 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.community.invite",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Invite an account; one that already asked becomes a member. Re-invites a removed account. Moderators only: the community account and the accounts its managing app names. Served by the managing app named in the community space's policy, at its #umbrae_app endpoint, with atproto service auth (iss the caller, aud the managing app, lxm this method); clients call through their PDS with atproto-proxy set to the policy's managingApp. Any managing app may serve it: a serving app, or a PDS that manages its own communities.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "community",
+            "did"
+          ],
+          "properties": {
+            "community": {
+              "type": "string",
+              "format": "did",
+              "description": "The community account's DID."
+            },
+            "did": {
+              "type": "string",
+              "format": "did"
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "state"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "knownValues": [
+                "invited",
+                "member"
+              ]
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "CommunityNotFound",
+          "description": "Not a community this managing app manages."
+        },
+        {
+          "name": "NotAllowed",
+          "description": "The caller lacks the role this needs."
+        },
+        {
+          "name": "NotAdmitted",
+          "description": "The managing app doesn't admit this account."
+        }
+      ]
+    }
+  }
+}

@@ -31,8 +31,8 @@
 //! allowed, as Lexicon evolution allows. A record that fails is dropped
 //! from views; it is never an error for the space as a whole.
 
-mod labeler;
 mod community;
+mod labeler;
 mod list;
 mod migrate;
 mod social;
@@ -75,6 +75,14 @@ pub const THREADGATE: &str = "tools.umbrae.threadgate";
 pub const POSTGATE: &str = "tools.umbrae.postgate";
 pub const FEED: &str = "tools.umbrae.feed";
 pub const LIST_SUBSCRIPTION: &str = "tools.umbrae.listSubscription";
+/// Community membership methods, served by a community's managing app.
+pub const COMMUNITY_GET: &str = "tools.umbrae.community.getCommunity";
+pub const COMMUNITY_JOIN: &str = "tools.umbrae.community.join";
+pub const COMMUNITY_LEAVE: &str = "tools.umbrae.community.leave";
+pub const COMMUNITY_LIST_MEMBERS: &str = "tools.umbrae.community.listMembers";
+pub const COMMUNITY_DECIDE: &str = "tools.umbrae.community.decide";
+pub const COMMUNITY_INVITE: &str = "tools.umbrae.community.invite";
+pub const COMMUNITY_REMOVE: &str = "tools.umbrae.community.remove";
 /// The followers space's key: a private account's approved followers.
 pub const FOLLOWERS_SKEY: &str = "followers";
 /// A community's space key: the space whose authority is the community's
@@ -161,6 +169,34 @@ pub const LEXICONS: &[(&str, &str)] = &[
     (
         LABELER_AUDIENCE,
         include_str!("../lexicons/tools/umbrae/labelerAudience.json"),
+    ),
+    (
+        COMMUNITY_GET,
+        include_str!("../lexicons/tools/umbrae/community/getCommunity.json"),
+    ),
+    (
+        COMMUNITY_JOIN,
+        include_str!("../lexicons/tools/umbrae/community/join.json"),
+    ),
+    (
+        COMMUNITY_LEAVE,
+        include_str!("../lexicons/tools/umbrae/community/leave.json"),
+    ),
+    (
+        COMMUNITY_LIST_MEMBERS,
+        include_str!("../lexicons/tools/umbrae/community/listMembers.json"),
+    ),
+    (
+        COMMUNITY_DECIDE,
+        include_str!("../lexicons/tools/umbrae/community/decide.json"),
+    ),
+    (
+        COMMUNITY_INVITE,
+        include_str!("../lexicons/tools/umbrae/community/invite.json"),
+    ),
+    (
+        COMMUNITY_REMOVE,
+        include_str!("../lexicons/tools/umbrae/community/remove.json"),
     ),
 ];
 

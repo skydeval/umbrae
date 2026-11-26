@@ -211,8 +211,20 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
     }
     let collection = uri.collection();
     if ![
-        POST, LIKE, GROUP, BOOKMARK, REPOST, LIST, LISTITEM, EXEMPTION, PROFILE, FOLLOW,
-        THREADGATE, POSTGATE, FEED, LIST_SUBSCRIPTION,
+        POST,
+        LIKE,
+        GROUP,
+        BOOKMARK,
+        REPOST,
+        LIST,
+        LISTITEM,
+        EXEMPTION,
+        PROFILE,
+        FOLLOW,
+        THREADGATE,
+        POSTGATE,
+        FEED,
+        LIST_SUBSCRIPTION,
     ]
     .contains(&collection)
     {
