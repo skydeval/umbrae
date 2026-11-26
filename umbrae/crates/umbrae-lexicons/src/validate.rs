@@ -487,14 +487,26 @@ pub(crate) fn string(
 ) -> Result<Option<String>, Invalid> {
     match m.get(key) {
         None => Ok(None),
-        Some(Value::Text(t)) => {
+        Some(v) => bounded(v, min, max_bytes, max_graphemes).map(Some),
+    }
+}
+
+/// A string value within byte and grapheme limits.
+pub(crate) fn bounded(
+    v: &Value,
+    min: usize,
+    max_bytes: usize,
+    max_graphemes: usize,
+) -> Result<String, Invalid> {
+    match v {
+        Value::Text(t) => {
             if t.len() < min || t.len() > max_bytes || t.graphemes(true).count() > max_graphemes {
                 Err(Invalid("string length out of range"))
             } else {
-                Ok(Some(t.clone()))
+                Ok(t.clone())
             }
         }
-        Some(_) => Err(Invalid("expected a string")),
+        _ => Err(Invalid("expected a string")),
     }
 }
 

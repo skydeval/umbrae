@@ -757,7 +757,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "umbrae"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "k256",
  "p256",
@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "umbrae-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64",
  "blake3",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "umbrae-interop"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64",
  "k256",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "umbrae-lexicons"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde_json",
  "umbrae-core",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "umbrae-sync"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64",
  "p256",

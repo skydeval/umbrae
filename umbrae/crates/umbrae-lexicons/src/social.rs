@@ -12,7 +12,7 @@
 //! writes into their own repo, so nothing stops a reply being written.
 
 use crate::labeler::{blob, BlobRef};
-use crate::validate::{datetime, mentions_space_uri, string, Invalid};
+use crate::validate::{bounded, datetime, mentions_space_uri, string, Invalid};
 use crate::{FOLLOWERS_SKEY, POST, SELF_RKEY};
 use std::collections::BTreeMap;
 use umbrae_core::drisl::Value;
@@ -26,16 +26,53 @@ pub const RULE_FOLLOWER: &str = "tools.umbrae.threadgate#followerRule";
 pub const RULE_LIST: &str = "tools.umbrae.threadgate#listRule";
 pub const RULE_DISABLE: &str = "tools.umbrae.postgate#disableRule";
 
+/// At most this many profile links, as on the public profile.
+pub const MAX_PROFILE_LINKS: usize = 10;
+/// A link title's limit in graphemes, as on the public profile.
+pub const MAX_LINK_TITLE: usize = 30;
+/// At most this many pronoun sets, as in `app.nearhorizon.actor.pronouns`.
+pub const MAX_PRONOUN_SETS: usize = 10;
+/// At most this many forms in one pronoun set.
+pub const MAX_PRONOUN_FORMS: usize = 12;
+
 /// An account's hidden profile, for its approved followers.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Profile {
     pub display_name: Option<String>,
     pub description: Option<String>,
+    /// The short form, for simple readers.
     pub pronouns: Option<String>,
+    /// The full sets, as in `app.nearhorizon.actor.pronouns`. Empty sets
+    /// show nothing, and hide the short form too.
+    pub pronoun_sets: Option<Vec<PronounSet>>,
+    /// `all` or `firstOnly`; anything else, or none, reads as `all`.
+    pub pronoun_display_mode: Option<String>,
     pub website: Option<String>,
+    /// Up to [`MAX_PROFILE_LINKS`], https only.
+    pub links: Vec<ProfileLink>,
     pub avatar: Option<BlobRef>,
+    pub avatar_alt: Option<String>,
     pub banner: Option<BlobRef>,
+    pub banner_alt: Option<String>,
     pub created_at: String,
+}
+
+/// One pronoun set: its forms, such as `["she", "her"]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PronounSet {
+    pub forms: Vec<String>,
+}
+
+/// One profile link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileLink {
+    /// An https URL. Readers also hide general-purpose shorteners and
+    /// duplicates when showing links, as the public side does.
+    pub url: String,
+    pub title: Option<String>,
+    /// The site's icon, served through space `getBlob`.
+    pub icon: Option<BlobRef>,
 }
 
 /// A hidden follow.
@@ -89,7 +126,7 @@ pub(crate) fn profile(m: &Map, uri: &SpaceRecordUri) -> Result<Profile, Invalid>
     no_hidden(m)?;
     let website = string(m, "website", 0, 2048, 2048)?;
     if let Some(w) = &website {
-        if !w.starts_with("https://") || w.len() <= "https://".len() {
+        if !is_https(w) {
             return Err(Invalid("website must be an https URL"));
         }
     }
@@ -97,11 +134,77 @@ pub(crate) fn profile(m: &Map, uri: &SpaceRecordUri) -> Result<Profile, Invalid>
         display_name: string(m, "displayName", 0, 640, 64)?,
         description: string(m, "description", 0, 2560, 256)?,
         pronouns: string(m, "pronouns", 0, 200, 20)?,
+        pronoun_sets: pronoun_sets(m.get("pronounSets"))?,
+        pronoun_display_mode: string(m, "pronounDisplayMode", 1, 64, 64)?,
         website,
+        links: links(m.get("links"))?,
         avatar: blob(m.get("avatar"))?,
+        avatar_alt: string(m, "avatarAlt", 1, 20000, 2000)?,
         banner: blob(m.get("banner"))?,
+        banner_alt: string(m, "bannerAlt", 1, 20000, 2000)?,
         created_at: datetime(m, "createdAt")?,
     })
+}
+
+fn is_https(url: &str) -> bool {
+    url.len() > "https://".len()
+        && url.len() <= 2048
+        && url.starts_with("https://")
+        && !url.contains(char::is_whitespace)
+}
+
+fn pronoun_sets(v: Option<&Value>) -> Result<Option<Vec<PronounSet>>, Invalid> {
+    let sets = match v {
+        None => return Ok(None),
+        Some(Value::Array(a)) if a.len() <= MAX_PRONOUN_SETS => a,
+        Some(_) => return Err(Invalid("pronounSets must be at most 10 sets")),
+    };
+    sets.iter()
+        .map(|s| {
+            let forms = match s {
+                Value::Map(s) => match s.get("forms") {
+                    Some(Value::Array(f)) if (1..=MAX_PRONOUN_FORMS).contains(&f.len()) => f,
+                    _ => return Err(Invalid("a pronoun set has 1 to 12 forms")),
+                },
+                _ => return Err(Invalid("a pronoun set must be an object")),
+            };
+            Ok(PronounSet {
+                forms: forms
+                    .iter()
+                    .map(|f| bounded(f, 1, 64, 24))
+                    .collect::<Result<_, _>>()?,
+            })
+        })
+        .collect::<Result<_, _>>()
+        .map(Some)
+}
+
+fn links(v: Option<&Value>) -> Result<Vec<ProfileLink>, Invalid> {
+    let links = match v {
+        None => return Ok(Vec::new()),
+        Some(Value::Array(a)) if a.len() <= MAX_PROFILE_LINKS => a,
+        Some(_) => return Err(Invalid("links must be at most 10")),
+    };
+    links
+        .iter()
+        .map(|l| {
+            let Value::Map(l) = l else {
+                return Err(Invalid("a link must be an object"));
+            };
+            let url = match l.get("url") {
+                Some(u) => bounded(u, 1, 2048, 2048)?,
+                None => return Err(Invalid("a link needs a url")),
+            };
+            if !is_https(&url) {
+                return Err(Invalid("a link must be an https URL"));
+            }
+            Ok(ProfileLink {
+                url,
+                title: string(l, "title", 1, 300, MAX_LINK_TITLE)?,
+                icon: blob(l.get("icon"))?,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn follow(m: &Map, uri: &SpaceRecordUri) -> Result<Follow, Invalid> {
@@ -334,6 +437,123 @@ mod tests {
         leak.insert(
             "description".into(),
             t(&at(GROUP, ALICE, POST, RKEY).to_string()),
+        );
+        assert!(validate_record(&at_f, &leak).is_err());
+    }
+
+    #[test]
+    fn profile_pronoun_sets_links_and_alt_text() {
+        let icon = Value::Map(map(&[
+            ("$type", t("blob")),
+            ("ref", Value::Link(Cid::for_drisl(b"ico"))),
+            ("mimeType", t("image/png")),
+            ("size", Value::Integer(10)),
+        ]));
+        let set = |forms: &[&str]| {
+            Value::Map(map(&[(
+                "forms",
+                Value::Array(forms.iter().map(|f| t(f)).collect()),
+            )]))
+        };
+        let link = |url: &str, title: Option<&str>, icon: Option<Value>| {
+            let mut l = map(&[("url", t(url))]);
+            if let Some(x) = title {
+                l.insert("title".into(), t(x));
+            }
+            if let Some(i) = icon {
+                l.insert("icon".into(), i);
+            }
+            Value::Map(l)
+        };
+        let p = map(&[
+            ("$type", t(PROFILE)),
+            ("pronouns", t("she/they")),
+            (
+                "pronounSets",
+                Value::Array(vec![set(&["she", "her"]), set(&["they", "them"])]),
+            ),
+            ("pronounDisplayMode", t("firstOnly")),
+            (
+                "links",
+                Value::Array(vec![
+                    link("https://example.com/a", Some("Shop"), Some(icon)),
+                    link("https://example.org", None, None),
+                ]),
+            ),
+            ("avatarAlt", t("A cat on a keyboard")),
+            ("bannerAlt", t("Mountains")),
+            ("createdAt", t(NOW)),
+        ]);
+        let at_f = at(FOLLOWERS_SKEY, ALICE, PROFILE, "self");
+        let Ok(Some(Record::Profile(pr))) = validate_record(&at_f, &p) else {
+            panic!("profile should validate");
+        };
+        assert_eq!(pr.pronoun_sets.as_ref().map(Vec::len), Some(2));
+        assert_eq!(pr.pronoun_sets.unwrap()[1].forms, ["they", "them"]);
+        assert_eq!(pr.pronoun_display_mode.as_deref(), Some("firstOnly"));
+        assert_eq!(pr.links.len(), 2);
+        assert!(pr.links[0].icon.is_some() && pr.links[1].title.is_none());
+        assert_eq!(pr.avatar_alt.as_deref(), Some("A cat on a keyboard"));
+        assert_eq!(pr.banner_alt.as_deref(), Some("Mountains"));
+        // Empty sets are allowed: they show nothing.
+        let mut empty = p.clone();
+        empty.insert("pronounSets".into(), Value::Array(vec![]));
+        assert!(validate_record(&at_f, &empty).is_ok());
+
+        let too_many_links = Value::Array(
+            (0..=MAX_PROFILE_LINKS)
+                .map(|i| link(&format!("https://example.com/{i}"), None, None))
+                .collect(),
+        );
+        let too_many_sets = Value::Array((0..=MAX_PRONOUN_SETS).map(|_| set(&["xe"])).collect());
+        let pdf = Value::Map(map(&[
+            ("$type", t("blob")),
+            ("ref", Value::Link(Cid::for_drisl(b"pdf"))),
+            ("mimeType", t("application/pdf")),
+            ("size", Value::Integer(10)),
+        ]));
+        for (k, v) in [
+            (
+                "links",
+                Value::Array(vec![link("http://example.com", None, None)]),
+            ),
+            (
+                "links",
+                Value::Array(vec![link("javascript:alert(1)", None, None)]),
+            ),
+            (
+                "links",
+                Value::Array(vec![link(
+                    "https://example.com",
+                    Some(&"x".repeat(31)),
+                    None,
+                )]),
+            ),
+            (
+                "links",
+                Value::Array(vec![link("https://example.com", None, Some(pdf))]),
+            ),
+            ("links", Value::Array(vec![Value::Map(map(&[]))])),
+            ("links", too_many_links),
+            ("pronounSets", too_many_sets),
+            ("pronounSets", Value::Array(vec![set(&[])])),
+            ("pronounSets", Value::Array(vec![set(&[&"x".repeat(25)])])),
+            ("avatarAlt", t("")),
+            ("bannerAlt", t(&"x".repeat(2001))),
+        ] {
+            let mut bad = p.clone();
+            bad.insert(k.into(), v.clone());
+            assert!(validate_record(&at_f, &bad).is_err(), "{k}={v:?}");
+        }
+        // A hidden URI is refused in a link too.
+        let mut leak = p.clone();
+        leak.insert(
+            "links".into(),
+            Value::Array(vec![link(
+                "https://example.com",
+                Some(&at(GROUP, ALICE, POST, RKEY).to_string()),
+                None,
+            )]),
         );
         assert!(validate_record(&at_f, &leak).is_err());
     }

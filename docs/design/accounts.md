@@ -12,7 +12,7 @@ Follow requests are the app's business and never public. Approving a request is 
 
 ## Hidden profile
 
-`tools.umbrae.profile` is written by the authority at `self`, **only in the followers space**, so approved followers see it. Fields: `{displayName?, description?, pronouns?, website?, avatar?, banner?, createdAt}`, with `app.bsky.actor.profile`'s limits. `website` is an https URL.
+`tools.umbrae.profile` is written by the authority at `self`, **only in the followers space**, so approved followers see it. Fields: `{displayName?, description?, pronouns?, pronounSets?, pronounDisplayMode?, website?, links?, avatar?, avatarAlt?, banner?, bannerAlt?, createdAt}`, with `app.bsky.actor.profile`'s limits. `website` and every link `url` are https URLs. There are at most 10 links, each with an optional 30-grapheme `title` and an `icon` image. The pronoun sets follow `app.nearhorizon.actor.pronouns`.
 
 The avatar and banner are blobs referenced only from the space:
 - readers fetch them with space `getBlob` and a credential, then check the CID;

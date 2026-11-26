@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-26
+
+### Added
+- `tools.umbrae.profile` matches the public profile:
+  - `pronounSets` (up to 10 sets of 1 to 12 forms, as in `app.nearhorizon.actor.pronouns`) and `pronounDisplayMode` (`all` or `firstOnly`), next to the short `pronouns`;
+  - `links`: up to 10, each an https `url` with an optional `title` (30 graphemes) and `icon` (png or jpeg, at most 1 MB). Readers hide duplicates and general-purpose shorteners when showing them;
+  - `avatarAlt` and `bannerAlt`.
+- `PronounSet`, `ProfileLink`, `MAX_PROFILE_LINKS`, `MAX_LINK_TITLE`, `MAX_PRONOUN_SETS` and `MAX_PRONOUN_FORMS`.
+
+### Changed
+- **Breaking:** `Profile` gains fields and is `#[non_exhaustive]`, so later fields can arrive in a patch.
+
 ## [0.5.0] - 2026-11-25
 
 ### Changed
@@ -128,7 +140,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/skydeval/umbrae/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/skydeval/umbrae/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/skydeval/umbrae/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/skydeval/umbrae/compare/v0.4.1...v0.4.2

@@ -25,12 +25,40 @@
           "pronouns": {
             "type": "string",
             "maxLength": 200,
-            "maxGraphemes": 20
+            "maxGraphemes": 20,
+            "description": "The short form, for readers that don't show sets. Kept in step with pronounSets."
+          },
+          "pronounSets": {
+            "type": "array",
+            "maxLength": 10,
+            "items": {
+              "type": "ref",
+              "ref": "#pronounSet"
+            },
+            "description": "The full pronoun sets, as in app.nearhorizon.actor.pronouns. Empty shows nothing, and hides the short form too."
+          },
+          "pronounDisplayMode": {
+            "type": "string",
+            "knownValues": [
+              "all",
+              "firstOnly"
+            ],
+            "maxLength": 64,
+            "description": "Absent or unknown reads as all."
           },
           "website": {
             "type": "string",
             "format": "uri",
             "description": "An https URL."
+          },
+          "links": {
+            "type": "array",
+            "maxLength": 10,
+            "items": {
+              "type": "ref",
+              "ref": "#link"
+            },
+            "description": "Profile links, as on the public profile. Readers hide duplicates and general-purpose URL shorteners."
           },
           "avatar": {
             "type": "blob",
@@ -40,6 +68,13 @@
             ],
             "maxSize": 1000000
           },
+          "avatarAlt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000,
+            "maxGraphemes": 2000,
+            "description": "Alt text for the avatar."
+          },
           "banner": {
             "type": "blob",
             "accept": [
@@ -48,10 +83,65 @@
             ],
             "maxSize": 1000000
           },
+          "bannerAlt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000,
+            "maxGraphemes": 2000,
+            "description": "Alt text for the banner."
+          },
           "createdAt": {
             "type": "string",
             "format": "datetime"
           }
+        }
+      }
+    },
+    "pronounSet": {
+      "type": "object",
+      "required": [
+        "forms"
+      ],
+      "properties": {
+        "forms": {
+          "type": "array",
+          "minLength": 1,
+          "maxLength": 12,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "maxGraphemes": 24
+          }
+        }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048,
+          "description": "An https URL."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "maxGraphemes": 30
+        },
+        "icon": {
+          "type": "blob",
+          "accept": [
+            "image/png",
+            "image/jpeg"
+          ],
+          "maxSize": 1000000,
+          "description": "The site's icon, fetched through space getBlob."
         }
       }
     }

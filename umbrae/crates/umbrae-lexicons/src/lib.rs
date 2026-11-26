@@ -47,8 +47,9 @@ pub use list::{
     EXEMPTION_LABEL, EXEMPTION_LABELER, EXEMPTION_LIST,
 };
 pub use social::{
-    Follow, Postgate, Profile, ReplyRule, Threadgate, RULE_DISABLE, RULE_FOLLOWER, RULE_FOLLOWING,
-    RULE_LIST, RULE_MENTION,
+    Follow, Postgate, Profile, ProfileLink, PronounSet, ReplyRule, Threadgate, MAX_LINK_TITLE,
+    MAX_PROFILE_LINKS, MAX_PRONOUN_FORMS, MAX_PRONOUN_SETS, RULE_DISABLE, RULE_FOLLOWER,
+    RULE_FOLLOWING, RULE_LIST, RULE_MENTION,
 };
 pub use validate::{
     validate_record, Bookmark, Group, Invalid, Like, Post, PublicUri, Record, Reply, Repost,
