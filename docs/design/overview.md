@@ -30,6 +30,19 @@ Hidden means hidden from the public and from people outside the audience, **not 
 - The serving app makes hidden posts available to the community's moderation service.
 - Moderators never appear in a space's member list. Authors can't opt out, and the community's terms cover it.
 
+## Space URIs
+
+Space URIs follow the spaces spec:
+
+| What | Form |
+|---|---|
+| A space (the lexicon `space-ref` format) | `at:space/{spaceDid}/{spaceType}/{skey}` |
+| A record in a space | `at:space/{spaceDid}/{spaceType}/{skey}/{authorDid}/{collection}/{rkey}` |
+
+- **Strict parsing:** only these two lengths, a lowercase `at:space/` prefix, DIDs (never handles) in both DID slots, and no query, fragment, empty segment or trailing slash.
+- **The old form:** `at://{spaceDid}/space/...` is no longer a space URI, and parsing refuses it. The leak checks still treat it as one, since it still names hidden data.
+- **Migration:** the PDS doesn't rewrite URIs stored inside record values, so records written before the change are dropped by validation until their authors rewrite them. `upgrade_space_uris` rewrites a record value in place, and the author puts it back at the same key.
+
 ## Hidden URIs never go public
 
 A space URI has no public meaning, and naming one in public reveals that the record exists. So:

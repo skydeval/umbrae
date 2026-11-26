@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-25
+
+### Changed
+- **Breaking:** space URIs use the `at:space/` form from the spaces spec (proposal 0016, merged 2026-11-25):
+  - a space is `at:space/{spaceDid}/{spaceType}/{skey}`;
+  - a record is `at:space/{spaceDid}/{spaceType}/{skey}/{authorDid}/{collection}/{rkey}`.
+  `SpaceRef` and `SpaceRecordUri` format and parse only this form. The old `at://{did}/space/...` form fails with `UriError::LegacyForm`.
+- **Breaking:** `UriError` gains `LegacyForm` and is `#[non_exhaustive]`.
+- `is_space_uri` and `contains_space_uri` also match the new form (any case), and still match the old one, so neither form is ever taken for a public URI or let through into public text.
+- Commits, MACs, credential subjects and notifications carry the new form, as the reference PDS now does.
+
+### Added
+- `SPACE_URI_PREFIX`, `SpaceRef::parse_legacy`, `SpaceRecordUri::parse_legacy`, `is_legacy_space_uri` and `upgrade_legacy`, for reading and rewriting old-form URIs.
+- `upgrade_space_uris`, which rewrites the old-form space URIs stored in a record value, so the author can put the record back. The PDS doesn't rewrite record values itself.
+
 ## [0.4.3] - 2026-11-23
 
 ### Added
@@ -113,7 +128,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/skydeval/umbrae/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/skydeval/umbrae/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/skydeval/umbrae/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/skydeval/umbrae/compare/v0.4.0...v0.4.1

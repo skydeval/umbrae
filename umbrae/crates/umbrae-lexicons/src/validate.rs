@@ -709,6 +709,13 @@ mod tests {
             Err(Invalid("a public parent can't have a hidden root"))
         );
         assert!(check(POST, BOB, RKEY, &reply("at://not a uri", &here)).is_err());
+        // The old at:// form of a hidden ref is refused, never read as public.
+        let (did, rest) = here["at:space/".len()..].split_once('/').unwrap();
+        let old = format!("at://{did}/space/{rest}");
+        assert_eq!(
+            check(POST, BOB, RKEY, &reply(&old, &old)),
+            Err(Invalid("malformed space record URI"))
+        );
     }
 
     #[test]

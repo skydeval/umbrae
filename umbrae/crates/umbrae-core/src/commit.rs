@@ -195,7 +195,7 @@ impl Commit {
     }
 
     /// The `Atproto-Space-Commit` header value, e.g.
-    /// `ver=1, repo="did:…", space="at://…", rev="3mwcj3b6uak2f", data=:…=:`.
+    /// `ver=1, repo="did:…", space="at:space/…", rev="3mwcj3b6uak2f", data=:…=:`.
     pub fn header(&self) -> String {
         let space = self.space.to_string();
         let mut ser = DictSerializer::new();
@@ -345,7 +345,7 @@ mod tests {
         Cid::parse("bafyreidpw4cbv6gr4ukh33z23pvvrpr3wi4gnpmi4doamlsl3sa4rgri2a").unwrap()
     }
 
-    const SPACE: &str = "at://did:example:space/space/app.bsky.group/test";
+    const SPACE: &str = "at:space/did:example:space/app.bsky.group/test";
     const REPO: &str = "did:example:alice";
     // The reference tests use `3kbcq3p7ad400`, which isn't a valid TID.
     const REV: &str = "3kbcq3p7ad422";
@@ -389,7 +389,7 @@ mod tests {
             Commit::from_parts(
                 1,
                 REPO,
-                SpaceRef::parse("at://did:example:space/space/app.bsky.group/other").unwrap(),
+                SpaceRef::parse("at:space/did:example:space/app.bsky.group/other").unwrap(),
                 REV,
                 [1; 32],
             )
@@ -449,7 +449,7 @@ mod tests {
             c.check_for("did:example:bob", &space()),
             Err(CommitError::WrongRepo)
         );
-        let other = SpaceRef::parse("at://did:example:space/space/app.bsky.group/other").unwrap();
+        let other = SpaceRef::parse("at:space/did:example:space/app.bsky.group/other").unwrap();
         assert_eq!(c.check_for(REPO, &other), Err(CommitError::WrongSpace));
     }
 

@@ -279,7 +279,7 @@ mod tests {
     use super::*;
     use crate::uri::SpaceRef;
 
-    const SPACE: &str = "at://did:example:space/space/app.bsky.group/test";
+    const SPACE: &str = "at:space/did:example:space/app.bsky.group/test";
     const AUTHOR: &str = "did:example:alice";
     const REV: &str = "3kbcq3p7ad42b";
 

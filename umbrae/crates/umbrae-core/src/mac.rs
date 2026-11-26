@@ -170,7 +170,7 @@ pub fn commit_mac_headers(commit: &Commit, req: &MacRequest, secret: &[u8; 32]) 
     mac_headers(MacProfile::Commit, commit.header(), req, secret)
 }
 
-/// The `Atproto-Space-Record` value: `uri="at://…", cid="bafyrei…"`.
+/// The `Atproto-Space-Record` value: `uri="at:space/…", cid="bafyrei…"`.
 pub fn record_header(uri: &SpaceRecordUri, cid: &Cid) -> String {
     let (uri, cid) = (uri.to_string(), cid.to_string());
     let mut ser = DictSerializer::new();
@@ -270,7 +270,7 @@ mod tests {
     use p256::SecretKey;
     use rand_core::OsRng;
 
-    const SPACE: &str = "at://did:example:space/space/app.bsky.group/test";
+    const SPACE: &str = "at:space/did:example:space/app.bsky.group/test";
     const REV: &str = "3kbcq3p7ad422";
 
     fn commit() -> Commit {

@@ -223,7 +223,7 @@ pub fn parse_notification(bytes: &[u8]) -> Result<Notification, SyncError> {
 mod tests {
     use super::*;
 
-    const SPACE: &str = "at://did:example:alice/space/tools.umbrae.space/3mbbbbbbbbbb2";
+    const SPACE: &str = "at:space/did:example:alice/tools.umbrae.space/3mbbbbbbbbbb2";
 
     #[test]
     fn tokens() {

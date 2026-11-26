@@ -450,7 +450,7 @@ mod tests {
         let s = labeler_space(LABELER).unwrap();
         assert_eq!(
             s.to_string(),
-            format!("at://{LABELER}/space/{LABELER_SPACE_TYPE}/self")
+            format!("at:space/{LABELER}/{LABELER_SPACE_TYPE}/self")
         );
         let p = labeler_policy(vec!["https://app.example/client-metadata.json".into()]);
         assert_eq!(Policy::from_map(&p.to_map()).unwrap(), p);

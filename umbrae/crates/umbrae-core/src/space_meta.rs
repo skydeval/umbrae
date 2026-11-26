@@ -248,7 +248,7 @@ fn parse_writer(did: &str, value: &Map) -> Result<Writer, SpaceMetaError> {
 mod tests {
     use super::*;
 
-    const SPACE: &str = "at://did:example:forum/space/com.atmoboards.forum/general";
+    const SPACE: &str = "at:space/did:example:forum/com.atmoboards.forum/general";
 
     fn member(read: bool, write: bool) -> Map {
         Map::from([

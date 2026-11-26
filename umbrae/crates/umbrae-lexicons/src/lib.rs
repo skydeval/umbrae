@@ -31,8 +31,11 @@
 
 mod labeler;
 mod list;
+mod migrate;
 mod social;
 mod validate;
+
+pub use migrate::upgrade_space_uris;
 
 pub use labeler::{
     is_public_subject, label_subject, validate_labeler_record, BlobRef, Label, LabelSubject,

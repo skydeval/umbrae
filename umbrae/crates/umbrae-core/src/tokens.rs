@@ -510,7 +510,7 @@ mod tests {
     use super::*;
 
     const NOW: i64 = 1_738_368_000;
-    const SPACE: &str = "at://did:example:space/space/com.example.space/key";
+    const SPACE: &str = "at:space/did:example:space/com.example.space/key";
 
     fn space() -> SpaceRef {
         SpaceRef::parse(SPACE).unwrap()
@@ -693,7 +693,7 @@ mod tests {
                 NOW,
                 &Expect {
                     aud: None,
-                    sub: Some("at://did:example:space/space/com.example.space/other")
+                    sub: Some("at:space/did:example:space/com.example.space/other")
                 }
             ),
             Err(TokenError::BadJwtSub)

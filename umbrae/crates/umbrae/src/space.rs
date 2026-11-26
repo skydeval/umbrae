@@ -175,7 +175,7 @@ mod tests {
         let l = list_space(ALICE, SKEY).unwrap();
         assert_eq!(
             l.to_string(),
-            format!("at://{ALICE}/space/{LIST_SPACE_TYPE}/{SKEY}")
+            format!("at:space/{ALICE}/{LIST_SPACE_TYPE}/{SKEY}")
         );
         assert!(list_space(ALICE, "self").is_err());
         let p = list_policy(None);
@@ -228,7 +228,7 @@ mod tests {
         let g = group_space(ALICE, SKEY).unwrap();
         assert_eq!(
             g.to_string(),
-            format!("at://{ALICE}/space/{SPACE_TYPE}/{SKEY}")
+            format!("at:space/{ALICE}/{SPACE_TYPE}/{SKEY}")
         );
         assert!(group_space(ALICE, "friends").is_err());
         assert!(group_space(ALICE, ONLY_ME_SKEY).is_err());
