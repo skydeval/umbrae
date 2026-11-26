@@ -1,0 +1,53 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.feed",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "An author-driven feed in a community: no algorithm. Written by its builder in their own repo in the community space (key community). It shows posts that name it in post.feeds, from accounts on its current authors list who are current members. Readable by the whole community.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": [
+          "name",
+          "authors",
+          "createdAt"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 640,
+            "maxGraphemes": 64
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 3000,
+            "maxGraphemes": 300
+          },
+          "avatar": {
+            "type": "blob",
+            "accept": [
+              "image/png",
+              "image/jpeg"
+            ],
+            "maxSize": 1000000
+          },
+          "authors": {
+            "type": "array",
+            "maxLength": 5000,
+            "items": {
+              "type": "string",
+              "format": "did"
+            },
+            "description": "Who may send posts to this feed."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

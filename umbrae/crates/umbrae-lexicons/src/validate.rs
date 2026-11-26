@@ -14,11 +14,12 @@
 //!   and its subject is a hidden post (in any Umbrae space). Show it only
 //!   while its owner may still see that post.
 
+use crate::community::{feed, list_subscription, Feed, ListSubscription, MAX_FEEDS_PER_POST};
 use crate::list::{exemption, list, listitem, Exemption, List, ListItem};
 use crate::social::{follow, postgate, profile, threadgate, Follow, Postgate, Profile, Threadgate};
 use crate::{
-    BOOKMARK, EXEMPTION, FOLLOW, GROUP, GROUP_RKEY, LIKE, LIST, LISTITEM, POST, POSTGATE, PROFILE,
-    REPOST, SELF_RKEY, SPACE_TYPE, THREADGATE,
+    BOOKMARK, COMMUNITY_SKEY, EXEMPTION, FEED, FOLLOW, GROUP, GROUP_RKEY, LIKE, LIST, LISTITEM,
+    LIST_SUBSCRIPTION, POST, POSTGATE, PROFILE, REPOST, SELF_RKEY, SPACE_TYPE, THREADGATE,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -122,6 +123,7 @@ pub struct Reply {
 /// The parts of a post that Umbrae's rules use. The full value stays with
 /// the caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Post {
     pub text: String,
     pub created_at: String,
@@ -132,6 +134,9 @@ pub struct Post {
     /// `app.bsky.embed.recordWithMedia`. A hidden one is always a post in
     /// this post's own space.
     pub quote: Option<StrongRef>,
+    /// Community feeds it's sent to: `tools.umbrae.feed` records in this
+    /// post's own space, which is a community space. At most 3.
+    pub feeds: Vec<StrongRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,16 +175,20 @@ pub enum Record {
     Group(Group),
     Bookmark(Bookmark),
     Repost(Repost),
-    /// A personal list, in the owner's only-me space.
+    /// A hidden list; its audience is its space's.
     List(List),
     ListItem(ListItem),
     Exemption(Exemption),
-    /// The hidden profile, in the followers space.
+    /// A hidden profile, one per audience.
     Profile(Box<Profile>),
     /// A hidden follow, in only-me.
     Follow(Follow),
     Threadgate(Box<Threadgate>),
     Postgate(Box<Postgate>),
+    /// A community feed.
+    Feed(Box<Feed>),
+    /// A list subscription, in only-me.
+    ListSubscription(ListSubscription),
 }
 
 const EMBEDS: &[&str] = &[
@@ -203,7 +212,7 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
     let collection = uri.collection();
     if ![
         POST, LIKE, GROUP, BOOKMARK, REPOST, LIST, LISTITEM, EXEMPTION, PROFILE, FOLLOW,
-        THREADGATE, POSTGATE,
+        THREADGATE, POSTGATE, FEED, LIST_SUBSCRIPTION,
     ]
     .contains(&collection)
     {
@@ -229,18 +238,35 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
         }
         THREADGATE => Record::Threadgate(Box::new(threadgate(value, uri)?)),
         POSTGATE => Record::Postgate(Box::new(postgate(value, uri)?)),
-        LIST | LISTITEM | EXEMPTION => {
+        FEED => {
             tid_key(uri)?;
-            if space.skey() != SELF_RKEY || uri.author() != space.authority() {
-                return Err(Invalid(
-                    "lists and exemptions live only in their owner's only-me space",
-                ));
+            Record::Feed(Box::new(feed(value, uri)?))
+        }
+        LIST_SUBSCRIPTION => {
+            tid_key(uri)?;
+            Record::ListSubscription(list_subscription(value, uri)?)
+        }
+        LIST | LISTITEM => {
+            // A list's audience is its space's: only-me (the owner's own),
+            // a group, a community or the owner's everyone space. Entries
+            // name their list by key, in the same repo and space.
+            tid_key(uri)?;
+            if space.skey() == SELF_RKEY && uri.author() != space.authority() {
+                return Err(Invalid("only-me holds only its owner's lists"));
             }
             match collection {
                 LIST => Record::List(list(value)?),
-                LISTITEM => Record::ListItem(listitem(value, true)?),
-                _ => Record::Exemption(exemption(value, space.authority())?),
+                _ => Record::ListItem(listitem(value, true)?),
             }
+        }
+        EXEMPTION => {
+            tid_key(uri)?;
+            if space.skey() != SELF_RKEY || uri.author() != space.authority() {
+                return Err(Invalid(
+                    "exemptions live only in their owner's only-me space",
+                ));
+            }
+            Record::Exemption(exemption(value, space.authority())?)
         }
         REPOST => {
             tid_key(uri)?;
@@ -319,6 +345,24 @@ fn post(m: &Map, space: &SpaceRef) -> Result<Post, Invalid> {
             .collect::<Result<_, _>>()?,
         Some(_) => return Err(Invalid("langs must be an array of at most 3")),
     };
+    let feeds = match m.get("feeds") {
+        None => Vec::new(),
+        Some(Value::Array(a)) if a.len() <= MAX_FEEDS_PER_POST => {
+            if space.skey() != COMMUNITY_SKEY {
+                return Err(Invalid("only a post in a community is sent to feeds"));
+            }
+            a.iter()
+                .map(|f| {
+                    let r = strong_ref(Some(f))?;
+                    match &r.target {
+                        Target::Hidden(u) if u.space() == space && u.collection() == FEED => Ok(r),
+                        _ => Err(Invalid("a post's feeds are feeds in its own space")),
+                    }
+                })
+                .collect::<Result<_, _>>()?
+        }
+        Some(_) => return Err(Invalid("feeds must be an array of at most 3")),
+    };
     Ok(Post {
         text,
         created_at,
@@ -326,6 +370,7 @@ fn post(m: &Map, space: &SpaceRef) -> Result<Post, Invalid> {
         langs,
         has_embed,
         quote,
+        feeds,
     })
 }
 
@@ -452,7 +497,7 @@ fn group(m: &Map) -> Result<Group, Invalid> {
     })
 }
 
-fn strong_ref(v: Option<&Value>) -> Result<StrongRef, Invalid> {
+pub(crate) fn strong_ref(v: Option<&Value>) -> Result<StrongRef, Invalid> {
     let m = match v {
         Some(Value::Map(m)) => m,
         _ => return Err(Invalid("strong ref must be an object")),

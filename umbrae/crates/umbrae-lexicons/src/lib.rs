@@ -16,6 +16,8 @@
 //! | `tools.umbrae.follow` | a hidden follow |
 //! | `tools.umbrae.threadgate` | who may reply to a hidden post, and hidden replies |
 //! | `tools.umbrae.postgate` | detached and disabled quotes of a hidden post |
+//! | `tools.umbrae.feed` | an author-driven feed in a community |
+//! | `tools.umbrae.listSubscription` | a subscription to a list, in only-me |
 //! | `tools.umbrae.listSpace` | the space type: one shared list |
 //! | `tools.umbrae.labeler` | the space type: one private labeler |
 //! | `tools.umbrae.label` | a label (the fields of `com.atproto.label.defs#label`) |
@@ -30,11 +32,13 @@
 //! from views; it is never an error for the space as a whole.
 
 mod labeler;
+mod community;
 mod list;
 mod migrate;
 mod social;
 mod validate;
 
+pub use community::{Feed, ListSubscription, MAX_FEEDS_PER_POST, MAX_FEED_AUTHORS};
 pub use migrate::upgrade_space_uris;
 
 pub use labeler::{
@@ -69,8 +73,15 @@ pub const PROFILE: &str = "tools.umbrae.profile";
 pub const FOLLOW: &str = "tools.umbrae.follow";
 pub const THREADGATE: &str = "tools.umbrae.threadgate";
 pub const POSTGATE: &str = "tools.umbrae.postgate";
+pub const FEED: &str = "tools.umbrae.feed";
+pub const LIST_SUBSCRIPTION: &str = "tools.umbrae.listSubscription";
 /// The followers space's key: a private account's approved followers.
 pub const FOLLOWERS_SKEY: &str = "followers";
+/// A community's space key: the space whose authority is the community's
+/// own account, with membership held by its managing app.
+pub const COMMUNITY_SKEY: &str = "community";
+/// An account's "everyone with Umbrae" space key.
+pub const EVERYONE_SKEY: &str = "everyone";
 /// The space type of a shared list.
 pub const LIST_SPACE_TYPE: &str = "tools.umbrae.listSpace";
 /// The record key for singletons, and the labeler space's key.
@@ -116,6 +127,11 @@ pub const LEXICONS: &[(&str, &str)] = &[
     (
         POSTGATE,
         include_str!("../lexicons/tools/umbrae/postgate.json"),
+    ),
+    (FEED, include_str!("../lexicons/tools/umbrae/feed.json")),
+    (
+        LIST_SUBSCRIPTION,
+        include_str!("../lexicons/tools/umbrae/listSubscription.json"),
     ),
     (
         LIST_SPACE_TYPE,
@@ -185,8 +201,20 @@ mod tests {
         assert_eq!(
             cols,
             [
-                POST, LIKE, GROUP, BOOKMARK, REPOST, LIST, LISTITEM, EXEMPTION, PROFILE, FOLLOW,
-                THREADGATE, POSTGATE
+                POST,
+                LIKE,
+                GROUP,
+                BOOKMARK,
+                REPOST,
+                LIST,
+                LISTITEM,
+                EXEMPTION,
+                PROFILE,
+                FOLLOW,
+                THREADGATE,
+                POSTGATE,
+                FEED,
+                LIST_SUBSCRIPTION
             ]
         );
     }

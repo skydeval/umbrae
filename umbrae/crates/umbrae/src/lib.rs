@@ -11,6 +11,8 @@
 //! - [`placement`]: which space a reply or like goes into, and the check that
 //!   a public record never points at a hidden one.
 //! - [`access`]: who may see a space, its member list and its records.
+//! - [`community`]: communities, feeds, profile copies per audience and
+//!   list subscriptions.
 //! - [`labeler`]: private labelers: the space, its policy and readers,
 //!   label signatures, and which labels are in effect.
 //!
@@ -18,6 +20,7 @@
 //! `umbrae-core`.
 
 pub mod access;
+pub mod community;
 pub mod labeler;
 pub mod placement;
 pub mod space;

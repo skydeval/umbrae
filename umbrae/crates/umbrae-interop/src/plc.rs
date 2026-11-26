@@ -14,7 +14,7 @@ pub struct Directory {
     ops: Arc<Mutex<HashMap<String, Value>>>,
 }
 
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -78,6 +78,11 @@ impl Directory {
             .get(id)?
             .as_str()
             .map(str::to_owned)
+    }
+
+    /// Register a DID's operation directly, as for a service with no PDS.
+    pub fn put(&self, did: &str, op: Value) {
+        self.ops.lock().unwrap().insert(did.to_owned(), op);
     }
 
     /// Serve until the process exits.

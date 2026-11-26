@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "An account's hidden profile, shown only to its approved followers. Written by the authority at key self in its followers space (a tools.umbrae.space space with key followers). Blobs are fetched through space getBlob, never publicly.",
+      "description": "An account's hidden profile, one copy per audience, each at key self: in the owner's followers space, a group or its everyone space (written by the owner), or in a community space (written by the member, in their own repo). Never in only-me. A viewer sees the copy for the narrowest audience they're in: a group, then followers, then a community, then everyone; ties go to the latest updatedAt. Blobs are fetched through space getBlob, never publicly.",
       "key": "literal:self",
       "record": {
         "type": "object",
@@ -93,6 +93,11 @@
           "createdAt": {
             "type": "string",
             "format": "datetime"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When this copy last changed."
           }
         }
       }

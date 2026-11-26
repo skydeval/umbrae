@@ -6,6 +6,9 @@
 //! - **A group** is visible to members with `read`, from the member list the
 //!   PDS publishes into the authority's repo. That list is shown only to
 //!   people who can see the space.
+//! - **A community or everyone space** (a managedspace) is visible to the
+//!   accounts its managing app says may read. The reader fills `members`
+//!   from that app (or is that app): nothing is published in the space.
 //! - **Only me** is visible to the author alone.
 //! - **A record** shows only if its author is the authority or a member
 //!   with `write` (a removed member's records drop out), and its author is
@@ -44,7 +47,8 @@ pub trait ViewContext {
     fn blocked(&self, a: &str, b: &str) -> Tri;
 }
 
-/// A group's member list, as published into the space.
+/// A space's members: a group's, as published into the space, or a managed
+/// space's, as its managing app answers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Members(BTreeMap<String, MemberAccess>);
 
@@ -125,7 +129,7 @@ impl SpaceState {
             write: false,
         };
         match &self.policy {
-            Some(Policy::Member(_)) => self.members.get(did).unwrap_or(none),
+            Some(Policy::Member(_) | Policy::Managed(_)) => self.members.get(did).unwrap_or(none),
             _ => none,
         }
     }

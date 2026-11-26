@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "space",
-      "description": "One author's hidden posts for one group of people. The author is the space authority; the space is a memberspace (or a personalspace for only-me) whose member list is published to members only. A group's key is a TID; a private account's approved followers use the key followers; only-me uses the key self.",
+      "description": "One author's hidden posts for one group of people. The author is the space authority; the space is a memberspace (or a personalspace for only-me) whose member list is published to members only. A group's key is a TID; a private account's approved followers use the key followers; only-me uses the key self. Special keys: self (only me), followers (a private account's approved followers), everyone (everyone with Umbrae, a managedspace), community (a community: the authority is the community's own account and the space is a managedspace, its managing app holding membership).",
       "key": "any",
       "title": "Umbrae hidden posts",
       "collections": [
@@ -19,7 +19,9 @@
         "tools.umbrae.profile",
         "tools.umbrae.follow",
         "tools.umbrae.threadgate",
-        "tools.umbrae.postgate"
+        "tools.umbrae.postgate",
+        "tools.umbrae.feed",
+        "tools.umbrae.listSubscription"
       ]
     }
   }

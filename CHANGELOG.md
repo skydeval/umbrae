@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-26
+
+### Added
+- Communities:
+  - a `tools.umbrae.space` space with the key `community`, whose authority is the community's own account;
+  - its policy is a published `managedspace` (`community_space`, `managed_policy`, accepted by `check_policy`);
+  - membership is held by the managing app through `checkAccess`: a serving app, or a PDS that manages its own communities;
+  - `SpaceState.members` takes the managing app's answers for managed spaces.
+- The "everyone with Umbrae" audience: an account's `everyone` space, also managed (`everyone_space`).
+- `tools.umbrae.feed`: an author-driven feed in a community, with up to 5000 authors. `Post.feeds` names up to 3 feeds in the post's own community. `can_view_feed_post` shows a post only while its author is on the feed's current author list.
+- `tools.umbrae.listSubscription`, in only-me, naming a list in any Umbrae space. Shown by `can_view_list_subscription`.
+- `profile_for_viewer` and `ProfileCopy`: the profile copy a viewer sees is the narrowest audience they're in. `tools.umbrae.profile` gains `updatedAt`.
+- `check_labeler_policy` accepts a published managed labeler space.
+- `is_managed`, `COMMUNITY_SKEY`, `EVERYONE_SKEY`, `FEED`, `LIST_SUBSCRIPTION`, `MAX_FEED_AUTHORS` and `MAX_FEEDS_PER_POST`.
+- Interop coverage of a managed community on the reference PDS, against a stand-in managing app. It checks: member writes tracked, a non-member refused, service auth on every check, removal, and failing closed when the app is down.
+
+### Changed
+- **Breaking:** `tools.umbrae.profile` may live at `self` in any audience space: followers, a group or everyone (by the owner), or a community (by the member). It never lives in only-me.
+- **Breaking:** lists and list items may live in any audience space, not only in only-me. Exemptions stay in only-me.
+- **Breaking:** `Post` is `#[non_exhaustive]` and gains `feeds`. `Record` gains `Feed` and `ListSubscription`.
+
 ## [0.6.0] - 2026-11-26
 
 ### Added
@@ -140,7 +161,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/skydeval/umbrae/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/skydeval/umbrae/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/skydeval/umbrae/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/skydeval/umbrae/compare/v0.4.2...v0.4.3

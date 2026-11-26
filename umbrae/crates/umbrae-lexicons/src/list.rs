@@ -332,12 +332,14 @@ mod tests {
         // A personal item must name its list by TID.
         assert!(validate_record(&only_me(ALICE, LISTITEM, RKEY), &item(None)).is_err());
         assert!(validate_record(&only_me(ALICE, LISTITEM, RKEY), &item(Some("self"))).is_err());
-        // Not in a group, not by someone else, not at a non-TID key.
-        let group = SpaceRef::new(ALICE, SPACE_TYPE, SKEY)
-            .unwrap()
-            .record(ALICE, LIST, RKEY)
-            .unwrap();
-        assert!(validate_record(&group, &a_list("mute")).is_err());
+        // A list may also live in an audience space (its audience is the
+        // space's), by the owner or a member writing to their own repo.
+        let group = SpaceRef::new(ALICE, SPACE_TYPE, SKEY).unwrap();
+        for author in [ALICE, BOB] {
+            let uri = group.record(author, LIST, RKEY).unwrap();
+            assert!(validate_record(&uri, &a_list("mute")).is_ok(), "{uri}");
+        }
+        // Not in someone else's only-me, not at a non-TID key.
         assert!(validate_record(&only_me(BOB, LIST, RKEY), &a_list("mute")).is_err());
         assert!(validate_record(&only_me(ALICE, LIST, "self"), &a_list("mute")).is_err());
     }

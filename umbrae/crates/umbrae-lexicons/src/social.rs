@@ -1,7 +1,8 @@
 //! Hidden profiles, hidden follows, thread gates and post gates.
 //!
-//! - `tools.umbrae.profile`: the authority's own, at `self`, only in its
-//!   followers space (skey `followers`), so approved followers see it.
+//! - `tools.umbrae.profile`: one copy per audience, at `self`. The owner
+//!   writes it into its followers space, a group or its everyone space; a
+//!   member writes its own into a community space. Never in only-me.
 //! - `tools.umbrae.follow`: a DID, in the follower's own only-me space.
 //! - `tools.umbrae.threadgate` and `tools.umbrae.postgate`: by a post's
 //!   author, in the post's space, at the post's record key. They name
@@ -12,8 +13,8 @@
 //! writes into their own repo, so nothing stops a reply being written.
 
 use crate::labeler::{blob, BlobRef};
-use crate::validate::{bounded, datetime, mentions_space_uri, string, Invalid};
-use crate::{FOLLOWERS_SKEY, POST, SELF_RKEY};
+use crate::validate::{bounded, datetime, is_datetime, mentions_space_uri, string, Invalid};
+use crate::{COMMUNITY_SKEY, POST, SELF_RKEY};
 use std::collections::BTreeMap;
 use umbrae_core::drisl::Value;
 use umbrae_core::uri::{is_space_uri, is_valid_did, is_valid_tid, SpaceRecordUri, SpaceRef};
@@ -56,6 +57,8 @@ pub struct Profile {
     pub banner: Option<BlobRef>,
     pub banner_alt: Option<String>,
     pub created_at: String,
+    /// When it last changed. Breaks ties between copies a viewer could see.
+    pub updated_at: Option<String>,
 }
 
 /// One pronoun set: its forms, such as `["she", "her"]`.
@@ -114,13 +117,17 @@ pub struct Postgate {
 }
 
 pub(crate) fn profile(m: &Map, uri: &SpaceRecordUri) -> Result<Profile, Invalid> {
+    // One copy per audience, at self: the owner's followers space, a
+    // group, or its everyone space, written by the authority; or a member's
+    // own copy in a community space. Never in only-me, which nobody else
+    // reads.
     let space = uri.space();
-    if space.skey() != FOLLOWERS_SKEY
-        || uri.author() != space.authority()
-        || uri.rkey() != SELF_RKEY
-    {
+    let placed = uri.rkey() == SELF_RKEY
+        && space.skey() != SELF_RKEY
+        && (space.skey() == COMMUNITY_SKEY || uri.author() == space.authority());
+    if !placed {
         return Err(Invalid(
-            "a hidden profile is the authority's, at self, in its followers space",
+            "a hidden profile is its owner's, at self, in an audience space it writes to",
         ));
     }
     no_hidden(m)?;
@@ -143,6 +150,11 @@ pub(crate) fn profile(m: &Map, uri: &SpaceRecordUri) -> Result<Profile, Invalid>
         banner: blob(m.get("banner"))?,
         banner_alt: string(m, "bannerAlt", 1, 20000, 2000)?,
         created_at: datetime(m, "createdAt")?,
+        updated_at: match m.get("updatedAt") {
+            None => None,
+            Some(Value::Text(t)) if is_datetime(t) => Some(t.clone()),
+            Some(_) => return Err(Invalid("updatedAt must be an atproto datetime")),
+        },
     })
 }
 
@@ -357,7 +369,10 @@ fn no_hidden(m: &Map) -> Result<(), Invalid> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{validate_record, Record, FOLLOW, POSTGATE, PROFILE, SPACE_TYPE, THREADGATE};
+    use crate::{
+        validate_record, Record, EVERYONE_SKEY, FOLLOW, FOLLOWERS_SKEY, POSTGATE, PROFILE, SPACE_TYPE,
+        THREADGATE,
+    };
     use umbrae_core::cid::Cid;
 
     const ALICE: &str = "did:plc:aliceaaaaaaaaaaaaaaaaaaa";
@@ -414,10 +429,20 @@ mod tests {
             validate_record(&at(FOLLOWERS_SKEY, ALICE, PROFILE, "self"), &p),
             Ok(Some(Record::Profile(pr))) if pr.avatar.is_some()
         ));
-        // Not in a group, not in only-me, not someone else's, not at a TID.
+        // One copy per audience: followers, a group, everyone, and a
+        // member's own copy in a community.
         for uri in [
             at(GROUP, ALICE, PROFILE, "self"),
+            at(EVERYONE_SKEY, ALICE, PROFILE, "self"),
+            at(COMMUNITY_SKEY, BOB, PROFILE, "self"),
+        ] {
+            assert!(validate_record(&uri, &p).is_ok(), "{uri}");
+        }
+        // Not in only-me, not someone else's elsewhere, not at a TID.
+        for uri in [
             at("self", ALICE, PROFILE, "self"),
+            at(GROUP, BOB, PROFILE, "self"),
+            at(EVERYONE_SKEY, BOB, PROFILE, "self"),
             at(FOLLOWERS_SKEY, BOB, PROFILE, "self"),
             at(FOLLOWERS_SKEY, ALICE, PROFILE, RKEY),
         ] {

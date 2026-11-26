@@ -6,6 +6,14 @@
 //! | a private account's approved followers | `followers` | memberspace, as a group |
 //! | only me | `self` | personalspace |
 //! | a shared list | a TID | memberspace, not public, policy published, members **not** published |
+//! | a community | `community` | managedspace, policy published; the authority is the community's own account |
+//! | everyone with Umbrae | `everyone` | managedspace, policy published |
+//!
+//! A managed space's membership is held by its managing app, which the
+//! PDS asks through `com.atproto.managedspace.checkAccess`. That app may be
+//! prism, or a PDS such as Aurora-Locus managing its own communities:
+//! Umbrae doesn't care which. Nothing is published as member records; a
+//! reader learns who may see what from the managing app.
 //!
 //! A shared list's subscribers are read-only members who can't see each
 //! other. With no published member list, no app can serve the list: each
@@ -17,9 +25,9 @@
 //! app serving the posts learns who may see them.
 
 use umbrae_core::policy::MemberAccess;
-use umbrae_core::policy::{MemberPolicy, Policy};
+use umbrae_core::policy::{ManagedPolicy, MemberPolicy, Policy};
 use umbrae_core::uri::{is_valid_tid, SpaceRef, UriError};
-use umbrae_lexicons::{FOLLOWERS_SKEY, LIST_SPACE_TYPE, SPACE_TYPE};
+use umbrae_lexicons::{COMMUNITY_SKEY, EVERYONE_SKEY, FOLLOWERS_SKEY, LIST_SPACE_TYPE, SPACE_TYPE};
 
 /// The only-me space's key.
 pub const ONLY_ME_SKEY: &str = "self";
@@ -36,6 +44,32 @@ pub fn group_space(author: &str, skey: &str) -> Result<SpaceRef, UriError> {
 /// approved followers are members with read and write.
 pub fn followers_space(author: &str) -> Result<SpaceRef, UriError> {
     SpaceRef::new(author, SPACE_TYPE, FOLLOWERS_SKEY)
+}
+
+/// A community's space. `community` is the community's own account.
+pub fn community_space(community: &str) -> Result<SpaceRef, UriError> {
+    SpaceRef::new(community, SPACE_TYPE, COMMUNITY_SKEY)
+}
+
+/// An account's "everyone with Umbrae" space.
+pub fn everyone_space(owner: &str) -> Result<SpaceRef, UriError> {
+    SpaceRef::new(owner, SPACE_TYPE, EVERYONE_SKEY)
+}
+
+/// Whether the space's members come from a managing app.
+pub fn is_managed(space: &SpaceRef) -> bool {
+    space.space_type() == SPACE_TYPE
+        && (space.skey() == COMMUNITY_SKEY || space.skey() == EVERYONE_SKEY)
+}
+
+/// The policy a community or everyone space is created with.
+/// `managing_app` is the `did#serviceId` that answers `checkAccess`: for an
+/// everyone space, read for any admitted account and write for the owner.
+pub fn managed_policy(managing_app: &str) -> Policy {
+    Policy::Managed(ManagedPolicy {
+        managing_app: managing_app.to_owned(),
+        publish_policy: true,
+    })
 }
 
 pub fn only_me_space(author: &str) -> Result<SpaceRef, UriError> {
@@ -124,6 +158,13 @@ pub enum Misconfigured {
 pub fn check_policy(space: &SpaceRef, policy: &Policy) -> Result<(), Misconfigured> {
     if space.space_type() != SPACE_TYPE {
         return Err(Misconfigured::NotUmbrae);
+    }
+    if is_managed(space) {
+        return match policy {
+            Policy::Managed(p) if p.publish_policy => Ok(()),
+            Policy::Managed(_) => Err(Misconfigured::Unpublished),
+            _ => Err(Misconfigured::WrongPolicy),
+        };
     }
     match (is_only_me(space), policy) {
         (true, Policy::Personal) => Ok(()),

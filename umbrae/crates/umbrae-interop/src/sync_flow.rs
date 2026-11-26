@@ -124,9 +124,17 @@ fn serve_notifications(inbox: Arc<Mutex<Inbox>>) {
             let mut body = Vec::new();
             let _ = req.as_reader().take(64 * 1024).read_to_end(&mut body);
             let path = req.url().split('?').next().unwrap_or("").to_owned();
+            let authorization = req
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Authorization"))
+                .map(|h| h.value.as_str().to_owned());
+            let managed = crate::community_flow::handle(req.url(), authorization.as_deref());
             let mut ib = inbox.lock().unwrap();
             let expected = ib.token.clone().unwrap_or_default();
-            let (status, reply) = if path == format!("/xrpc/{}", notify::CONFIRM_NSID) {
+            let (status, reply) = if let Some(answer) = managed {
+                answer
+            } else if path == format!("/xrpc/{}", notify::CONFIRM_NSID) {
                 match notify::parse_confirmation(&body) {
                     Ok(c) if notify::token_matches(&expected, &c.token) => {
                         ib.confirmed += 1;

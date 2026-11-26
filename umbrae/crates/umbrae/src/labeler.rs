@@ -71,6 +71,16 @@ pub fn check_labeler_policy(space: &SpaceRef, policy: &Policy) -> Result<(), Mis
     }
     let p = match policy {
         Policy::Member(p) if space.skey() == SELF_RKEY => p,
+        // A community's labeler may leave its readers to a managing app
+        // (prism, or a PDS managing its own communities), which also sees
+        // each reader's attested app in checkAccess. It must answer read
+        // only, and write only for the labeler.
+        Policy::Managed(m) if space.skey() == SELF_RKEY => {
+            return match m.publish_policy {
+                true => Ok(()),
+                false => Err(Misconfigured::Unpublished),
+            }
+        }
         _ => return Err(Misconfigured::WrongPolicy),
     };
     if p.public_read {

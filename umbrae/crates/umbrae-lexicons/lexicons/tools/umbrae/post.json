@@ -8,11 +8,27 @@
       "key": "tid",
       "record": {
         "type": "object",
-        "required": ["text", "createdAt"],
+        "required": [
+          "text",
+          "createdAt"
+        ],
         "properties": {
-          "text": { "type": "string", "maxLength": 3000, "maxGraphemes": 300 },
-          "facets": { "type": "array", "items": { "type": "ref", "ref": "app.bsky.richtext.facet" } },
-          "reply": { "type": "ref", "ref": "#replyRef" },
+          "text": {
+            "type": "string",
+            "maxLength": 3000,
+            "maxGraphemes": 300
+          },
+          "facets": {
+            "type": "array",
+            "items": {
+              "type": "ref",
+              "ref": "app.bsky.richtext.facet"
+            }
+          },
+          "reply": {
+            "type": "ref",
+            "ref": "#replyRef"
+          },
           "embed": {
             "type": "union",
             "refs": [
@@ -23,18 +39,46 @@
               "app.bsky.embed.recordWithMedia"
             ]
           },
-          "langs": { "type": "array", "maxLength": 3, "items": { "type": "string", "format": "language" } },
-          "createdAt": { "type": "string", "format": "datetime" }
+          "langs": {
+            "type": "array",
+            "maxLength": 3,
+            "items": {
+              "type": "string",
+              "format": "language"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          },
+          "feeds": {
+            "type": "array",
+            "maxLength": 3,
+            "items": {
+              "type": "ref",
+              "ref": "com.atproto.repo.strongRef"
+            },
+            "description": "Community feeds this post is sent to: tools.umbrae.feed records in this post's own space, which must be a community space."
+          }
         }
       }
     },
     "replyRef": {
       "type": "object",
       "description": "A hidden parent or root must be in the same space as the reply. A public parent needs a public root.",
-      "required": ["root", "parent"],
+      "required": [
+        "root",
+        "parent"
+      ],
       "properties": {
-        "root": { "type": "ref", "ref": "com.atproto.repo.strongRef" },
-        "parent": { "type": "ref", "ref": "com.atproto.repo.strongRef" }
+        "root": {
+          "type": "ref",
+          "ref": "com.atproto.repo.strongRef"
+        },
+        "parent": {
+          "type": "ref",
+          "ref": "com.atproto.repo.strongRef"
+        }
       }
     }
   }

@@ -184,7 +184,7 @@ fn state_of(space: &SpaceRef, s: &Synced) -> SpaceState {
     )
 }
 
-fn umbrae_records(
+pub(crate) fn umbrae_records(
     space: &SpaceRef,
     s: &Synced,
 ) -> Vec<(SpaceRecordUri, Result<Option<Record>, String>)> {
