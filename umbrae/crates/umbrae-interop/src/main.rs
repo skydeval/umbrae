@@ -21,6 +21,7 @@ mod community_flow;
 mod labeler_flow;
 mod lexjson;
 mod plc;
+mod prism_mode;
 mod sync_flow;
 mod umbrae_flow;
 
@@ -261,6 +262,13 @@ fn main() {
             .timeout(Duration::from_secs(30))
             .build(),
     };
+    if std::env::var("HARNESS_MODE").as_deref() == Ok("prism") {
+        if let Err(e) = prism_mode::run(&pds) {
+            println!("prism fixture failed: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let mut report = Report::default();
     let result = run(&pds, &dir, &mut report);
     println!();
