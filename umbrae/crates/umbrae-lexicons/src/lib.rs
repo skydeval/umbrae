@@ -30,6 +30,9 @@
 //! | `tools.umbrae.private.rules` | who may see a private account's records |
 //! | `tools.umbrae.private.declaration` | in the public repo: the account is private, and its serving app |
 //!
+//! A `tools.umbrae.space` space also holds `com.atproto.label.record`, the
+//! spec's in-space labels ([`validate_space_label`]).
+//!
 //! Validation works on decoded DRISL maps, as they come out of a space
 //! repo (STAR archive, `listRepoOps` or `getRecord`). Unknown fields are
 //! allowed, as Lexicon evolution allows. A record that fails is dropped
@@ -41,6 +44,7 @@ mod list;
 mod migrate;
 mod private;
 mod social;
+mod space_label;
 mod validate;
 
 pub use community::{
@@ -65,6 +69,7 @@ pub use social::{
     MAX_LINK_TITLE, MAX_PROFILE_AUDIENCES, MAX_PROFILE_LINKS, MAX_PRONOUN_FORMS, MAX_PRONOUN_SETS,
     RULE_DISABLE, RULE_FOLLOWER, RULE_FOLLOWING, RULE_LIST, RULE_MENTION,
 };
+pub use space_label::{validate_space_label, SpaceLabel, SpaceLabelSubject};
 pub use validate::{
     validate_record, Bookmark, Group, Invalid, Like, Post, PublicUri, Record, Reply, Repost,
     StrongRef, Target,
@@ -85,6 +90,10 @@ pub const THREADGATE: &str = "tools.umbrae.threadgate";
 pub const POSTGATE: &str = "tools.umbrae.postgate";
 pub const FEED: &str = "tools.umbrae.feed";
 pub const LIST_SUBSCRIPTION: &str = "tools.umbrae.listSubscription";
+/// The spec's in-space label, written into the subject's own space.
+pub const SPACE_LABEL: &str = "com.atproto.label.record";
+/// The label value by which a space's authority takes a record down.
+pub const TAKEDOWN: &str = "!takedown";
 /// Community membership methods, served by a community's managing app.
 pub const COMMUNITY_GET: &str = "tools.umbrae.community.getCommunity";
 pub const COMMUNITY_JOIN: &str = "tools.umbrae.community.join";
@@ -403,7 +412,8 @@ mod tests {
                 THREADGATE,
                 POSTGATE,
                 FEED,
-                LIST_SUBSCRIPTION
+                LIST_SUBSCRIPTION,
+                SPACE_LABEL
             ]
         );
     }

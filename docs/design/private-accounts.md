@@ -170,6 +170,13 @@ Records come raw, as `{uri, cid, author, value}`, for the viewer's own app or cl
 
 The serving app's moderators may see private accounts through its moderation paths. They don't count as passing the rules: they get no `checkAccess` write, and never show as followers, in `getAccess` or in requests.
 
+### Labels and takedowns
+
+The private space isn't a `tools.umbrae.space`, so the rules for spaces in general apply (see [Takedowns](overview.md#takedowns)):
+- **The owner's `!takedown`** on a record here, an interactor's reply for instance, hides it where the serving app's spaces configuration honors it for `tools.umbrae.private`, which it does by default (`apply_takedowns`).
+- **In-space labels** count only from accounts the app lists in `SpaceState.label_writers`, the writer set minus the owner, and only where the reader trusts them as labelers. Interactors are in the writer set too, so trust is what decides. Labels on the native collections are ordinary in-space labels; `neg: true` and a subject outside the space never apply.
+- **After a `removeWriter`,** the app keeps a label writer's last-synced labels, as in communities, and `RecordsTakendown` is handled as for any space ([Clients and apps](clients-and-apps.md#keeping-a-copy-honest)).
+
 ## Known limits
 
 - Copies public services already hold aren't recalled: AppView caches, image and video CDNs, firehose consumers and archives.

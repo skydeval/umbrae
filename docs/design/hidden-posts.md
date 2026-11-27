@@ -45,6 +45,8 @@ So a reply, like, repost or quote of a hidden post never reaches anyone outside 
 
 The placement helpers take the actor. **In a community**, everyone writes only into their own space: a reply, like, repost or quote of a post in a community space goes into the actor's own space for the same community (same type and key), whose audience is the same community. A reply that also quotes goes there too.
 
+**In an everyone space**, interactions follow the post as in a group. Its managing app answers `checkAccess` with `read` and `write` for each account it admits, so their replies, likes and reposts there enter the writer set, and with `write` alone for the labelers it applies.
+
 ## Validation
 
 `validate_record(uri, value)` applies the lexicon's constraints plus these rules. A record that fails is dropped. In a community space, "its own space" below means any space of the same type and key, so a record may name posts in other members' spaces for the same community, never another community's.
@@ -75,7 +77,25 @@ The placement helpers take the actor. **In a community**, everyone writes only i
   - an inactive author or authority;
   - anything unknown.
 - **Records drop out:** records from repos that aren't current writers are hidden, so a removed member's replies and likes disappear with them.
+- **Taken down:** a record in `SpaceState.taken_down` shows to nobody, its author included (below).
 - **The rest:**
   - `can_view_repost`: the viewer may see both the repost and its subject, given both spaces' states: the same space, or in a community, two spaces of it.
   - `can_view_bookmark`: only its owner, and only while they may still see the bookmarked post.
   - A quoted hidden post is looked up in its own space's state. If the viewer can't see it, it shows as unavailable, while the quoting post still shows.
+
+## Takedowns
+
+A space's authority takes a record in its space down with an in-space label: a `com.atproto.label.record` with `val` `!takedown`, in its own repo, naming the record. In Umbrae spaces it's always honored (`apply_takedowns`):
+
+| Space | Whose `!takedown` counts | What it means |
+|---|---|---|
+| a group, followers, everyone | the owner | the owner removes a member's reply, like, repost or quote from their space; the member's repo keeps it |
+| a community space | the writer, and the community's named labeler | the writer's own works like deleting; the labeler's is the community's takedown (see [Communities](communities.md#moderation)) |
+| only-me, the profile, a labeler space, a shared list | ignored | the owner deletes or edits instead |
+
+- **For everyone:** a taken-down record leaves every view, its author's included. It shows as unavailable wherever it's referenced (`referenced_post`, the quoted-post rule), and counts, feeds and notifications drop it like a deleted record.
+- **Reversible:** the app keeps the record; deleting the label brings it back.
+- **Any collection,** in the label's own space. One naming another space, an account or the space itself is ignored, and so is one with `neg: true`.
+- **Anyone else's `!takedown`,** beyond the table, is an ordinary label value. It counts only from a label writer the reader trusts ([Private labelers](labelers.md#whose-labels-count)), and never takes a record down.
+
+Labels on group and followers posts stay in the labeler space. See [Labels in the subject's space](labelers.md#labels-in-the-subjects-space).

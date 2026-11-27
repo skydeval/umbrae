@@ -40,13 +40,25 @@
 //!   `aud` the app, and its `lxm` `checkAccess`;
 //! - nothing for a space it doesn't map to one of its communities, or whose
 //!   authority isn't a writer;
-//! - nothing, ever, when `repo` names an account: members read through the
-//!   app, and nobody writes into another's space;
+//! - nothing when `repo` names an account: members read through the app,
+//!   and nobody writes into another's space;
+//! - one exception (rule 4a): `repo` the community's named labeler, with no
+//!   `clientId`, gets `{read: false, write: true}`, so its in-space labels
+//!   enter the writer set. Only its label records count
+//!   ([`crate::access::is_label_writer`]). The labeler with a `clientId`,
+//!   and any other account, still get nothing;
 //! - with `repo` absent, `read` only for its own attested client ID, and
 //!   never `write`.
 //!
 //! So the app is the only reader of community spaces, and it checks each
-//! one with [`check_community_policy`] before syncing or serving it.
+//! one with [`check_community_policy`] before syncing or serving it. The
+//! PDS asks it for each write or delete notification from a repo other
+//! than the authority, so it answers from memory.
+//!
+//! An everyone space's managing app answers `read` and `write` for any
+//! account it admits, since replies, likes and reposts of a post there go
+//! into that space ([`crate::placement`]), and `{read: false, write: true}`
+//! for its configured labelers, which read posts through the app.
 //!
 //! A shared list's subscribers are read-only members who can't see each
 //! other. With no published member list, no app can serve the list: each
@@ -187,8 +199,9 @@ pub fn is_managed(space: &SpaceRef) -> bool {
 
 /// The policy a community or everyone space is created with.
 /// `managing_app` is the `did#serviceId` that answers `checkAccess`: for an
-/// everyone space, read for any admitted account and write for the owner;
-/// for a community space, the community's app (see the module docs).
+/// everyone space, read and write for any admitted account, and write only
+/// for its configured labelers; for a community space, the community's app
+/// (see the module docs).
 pub fn managed_policy(managing_app: &str) -> Policy {
     Policy::Managed(ManagedPolicy {
         managing_app: managing_app.to_owned(),

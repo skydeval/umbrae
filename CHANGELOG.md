@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-27
+
+Spaces compatibility: Umbrae reads and writes the spec's in-space labels, honors `!takedown`, and runs its interop suite against a second PDS.
+
+### Changed
+- **Breaking:** `SpaceState` gains `label_writers`, the accounts whose in-space labels may count (never members), and `taken_down`, the records a `!takedown` hides. Its fields are public, so code building it literally needs both; `SpaceState::new` fills them empty.
+- **Breaking:** `can_view_record` refuses a record in `taken_down`, for every viewer, its author included. Everything built on it follows: reposts, bookmarks, feeds, labels and `referenced_post`, which shows a taken-down post as unavailable.
+- `tools.umbrae.space` declares `com.atproto.label.record` among its collections, and its description says whose labels count. Lexicons are republished with this release.
+- `validate_record` checks a `com.atproto.label.record` in a `tools.umbrae.space` space, as `Record::SpaceLabel`.
+- `umbrae-sync` retries a `RepoDeactivated` once with the account's DID document resolved afresh, as it does a failed MAC.
+- Docs: a community app's `checkAccess` is asked for each write or delete notification from a repo other than the authority, not "never for writes"; it answers from memory. An everyone space's managing app answers `read` and `write` for the accounts it admits, whose replies, likes and reposts go into the post's space.
+
+### Added
+- In-space labels: `SPACE_LABEL`, `validate_space_label`, `SpaceLabel` and `SpaceLabelSubject`. The lexicon's constraints apply (`val` 1 to 128 bytes, datetimes, a TID key); a label naming anything but a record in its own space, or with `neg: true`, is ignored.
+- `current_space_labels`: per `(writer, uri, cid, val)`, the latest by `cts`, then record key; expired and ignored labels drop, and a deleted record counts as never written.
+- `is_label_writer`: a community's named labeler; an everyone space's writer set minus the authority; a group's or followers space's members with `write` (labelers are never listed there automatically, and one the owner adds is an ordinary member); in a private space, the accounts its app lists; nobody elsewhere. `can_view_space_label` and `can_view_space_repost_label` also need the reader's trust in that labeler and the viewer's right to see the post.
+- `merge_label_homes`: labeler-space and in-space labels as one list, de-duplicated by `(src, uri, cid, val)`.
+- `TAKEDOWN` and `apply_takedowns`: the authority's `!takedown` on a record in its space, and in a community space the named labeler's as the community's. Ignored in only-me, the profile, labeler spaces and shared lists. For other space types, `tools.umbrae.private` included, the serving app applies it per its spaces configuration, on by default.
+- Rule 4a for community apps: `checkAccess` answers `{read: false, write: true}` for the community's named labeler with no `clientId`, so its labels enter the writer set; a managing app keeps a removed label writer's last-synced labels.
+- `umbrae-sync`: `Checked::SpaceLabel`; `RepoChange::TakenDown`, with the keys `listRecords` still lists, when a host refuses a repo with `RecordsTakendown` (the cursor is kept); `list_records`; `host_changed` for an account that moved hosts; `missing_space`, `MissingSpace` and `MISSING_AFTER_MOVE` for a space answering `SpaceNotFound` after a move; `SyncError::is_space_deleted`, `is_records_takendown` and `is_repo_deactivated`. The daily resync drops cursors so every repo is fetched whole.
+- Docs: labels in the subject's space and whose count; takedowns for spaces in general and for Umbrae spaces; blobs; moving to another PDS, the hidden profile's sticky copy fallback included; the community's takedown; the labeler's scope.
+- The interop harness runs against atproto-crates' `atproto-pds` with `PDS_IMPL=crates`, built from a pinned commit by `scripts/build-atproto-pds.sh`, behind a TLS front. One table in `umbrae-interop` lists where the two PDSes answer differently: error names for an unauthenticated space read, a label record failing the lexicon or its key, another account's repo and `listWriters` with a session; a repo outside the writer set, which only the reference serves directly; and a legacy blob ref written with `validate: false`, which only atproto-pds accepts.
+- Interop coverage, on both PDSes, against a stand-in managing app: rule 4a (the labeler's label write is asked about and answered write, it syncs and counts; its own credential request is refused); another writer's label write stays outside the writer set; the named labeler's `!takedown` hides a post with a placeholder; after `removeWriter` the app's kept labels still apply and the labeler's next write brings its repo back whole; deleting label records removes them; in an everyone space, a configured labeler's label counts where trusted and an untrusted replier's doesn't, and an admitted reply is tracked; a group owner's `!takedown` hides a member's reply and deleting it brings it back. On atproto-pds only: a host record takedown answers `RecordsTakendown`, the syncer drops only that record, and op replay from an older cursor still carries it (a known limit).
+
 ## [0.8.1] - 2026-11-27
 
 ### Added
@@ -249,7 +273,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/skydeval/umbrae/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/skydeval/umbrae/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/skydeval/umbrae/compare/v0.7.4...v0.8.0
 [0.7.4]: https://github.com/skydeval/umbrae/compare/v0.7.3...v0.7.4

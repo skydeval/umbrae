@@ -9,6 +9,18 @@
 //!   commit;
 //! - a repo is never older than its cursor;
 //! - every inline record value hashes to its op's CID.
+//!
+//! What the caller keeps doing:
+//! - **A daily full fetch.** Op replay never learns of a record a host has
+//!   taken down, and atproto-pds still returns its value in the op log. At
+//!   least once a day, drop each repo's cursor before [`sync_space`], so
+//!   every repo is fetched with `getRepo`.
+//! - **Accounts that move.** On an `#identity` event whose `#atproto_pds`
+//!   changed, call [`host_changed`], drop the account's cached endpoint and
+//!   KEM key, and authorize again when it's the authority. A
+//!   `RepoDeactivated` from a host is retried once with the account's DID
+//!   document re-resolved (`refresh`). After a move, a space answering
+//!   `SpaceNotFound` is handled by [`missing_space`].
 
 use crate::credential::{json_body, Credential};
 use crate::error::SyncError;
@@ -26,7 +38,7 @@ use umbrae_core::drisl::{self, Value as D};
 use umbrae_core::kem::{self, Encapsulation};
 use umbrae_core::mac::{self, MacFields, MacProfile};
 use umbrae_core::repo_archive::read_repo_archive;
-use umbrae_core::uri::{is_valid_tid, SpaceRecordUri};
+use umbrae_core::uri::{is_valid_tid, SpaceRecordUri, SpaceRef};
 use umbrae_core::LtHash;
 
 type Map = BTreeMap<String, D>;
@@ -160,6 +172,67 @@ pub enum RepoChange {
     /// This repo couldn't be synced now; its cursor is kept and it's
     /// retried next time. Other repos are unaffected.
     Failed { repo: String, error: SyncError },
+    /// The host refused the whole repo with `RecordsTakendown`: a record in
+    /// it is taken down. Its cursor is kept, as for `Failed`, and the full
+    /// fetch is retried at the next one (the daily resync). Keep only the
+    /// held records of this repo whose `(collection, rkey, cid)` is in
+    /// `listed`, from `listRecords`, and drop the rest. The listing isn't
+    /// verified, so it only ever removes: never add a record from it, nor
+    /// take one from the op log that it doesn't list.
+    TakenDown {
+        repo: String,
+        listed: BTreeSet<(String, String, Cid)>,
+    },
+}
+
+/// An account's `#atproto_pds` changed: it moved to another host. Its op
+/// log there starts empty and its repo may get a new `rev`, so this drops
+/// its repo's cursor and the next [`sync_space`] fetches it in full.
+/// Returns `true` when the account is the space's authority: the credential
+/// and the notification registration were the old host's, so authorize
+/// again at the new one (registering again) before the next sync. The
+/// caller also drops its cached endpoint and KEM key for the account.
+pub fn host_changed(cursor: &mut SpaceCursor, space: &SpaceRef, did: &str) -> bool {
+    cursor.repos.remove(did);
+    did == space.authority()
+}
+
+/// How long a space that answers `SpaceNotFound` after its authority moved
+/// is kept, unserved, before its copy is dropped: 72 hours.
+pub const MISSING_AFTER_MOVE: i64 = 72 * 3600;
+
+/// What to do with a space whose host refused it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MissingSpace {
+    /// Keep it as before, and retry.
+    Keep,
+    /// Stop serving it now, keep its copy, and retry: it may answer again.
+    Unserved,
+    /// Drop its copy.
+    Drop,
+}
+
+/// What a reader does when the space's host answers `error`. `moved`: the
+/// authority's host changed since the space last answered. `since`: when it
+/// first answered `SpaceNotFound` after that (Unix seconds).
+/// - `SpaceDeleted` drops the copy.
+/// - `SpaceNotFound` after a move may be a space deleted before the move,
+///   whose tombstone didn't carry over: unserved at once, dropped after
+///   [`MISSING_AFTER_MOVE`] unless it answers again.
+/// - Anything else, or `SpaceNotFound` without a move: keep.
+pub fn missing_space(error: &SyncError, moved: bool, since: i64, now: i64) -> MissingSpace {
+    if error.is_space_deleted() {
+        MissingSpace::Drop
+    } else if moved && error.is_space_not_found() {
+        if now.saturating_sub(since) >= MISSING_AFTER_MOVE {
+            MissingSpace::Drop
+        } else {
+            MissingSpace::Unserved
+        }
+    } else {
+        MissingSpace::Keep
+    }
 }
 
 fn header_fields<'a>(r: &'a crate::transport::Response, p: MacProfile) -> MacFields<'a> {
@@ -278,15 +351,16 @@ pub async fn list_writers<T: Transport, D2: Directory>(
     Err(SyncError::Malformed("listWriters never ended"))
 }
 
-/// Whether a failure may come from a stale `#atproto_kem` key, so is worth
-/// one retry with the DID document re-resolved past any cache.
+/// Whether a failure may come from a stale DID document, so is worth one
+/// retry with it re-resolved past any cache: a rotated `#atproto_kem` key,
+/// or a deactivated repo at a host the account may have left.
 fn kem_may_be_stale(e: &SyncError) -> bool {
-    matches!(e, SyncError::Mac(_) | SyncError::MissingKey(_))
+    matches!(e, SyncError::Mac(_) | SyncError::MissingKey(_)) || e.is_repo_deactivated()
 }
 
 /// One repo in full, from its account's PDS, verified against its commit.
 /// A failed MAC is retried once with the account's KEM key re-resolved, as
-/// it may have rotated.
+/// it may have rotated, and so is `RepoDeactivated`, as it may have moved.
 pub async fn fetch_repo<T: Transport, D2: Directory>(
     transport: &T,
     directory: &D2,
@@ -353,6 +427,66 @@ async fn fetch_repo_once<T: Transport, D2: Directory>(
     Ok((RepoCursor::new(repo, commit.rev(), &hash), out))
 }
 
+/// The `(collection, rkey, cid)` of every record of `repo` its host lists
+/// (`listRecords`). Not verified against a commit: use it only to remove.
+pub async fn list_records<T: Transport, D2: Directory>(
+    transport: &T,
+    directory: &D2,
+    cred: &Credential,
+    repo: &str,
+    now: i64,
+) -> Result<BTreeSet<(String, String, Cid)>, SyncError> {
+    cred.check_live(now)?;
+    let space = cred.space();
+    let id = directory.resolve(repo, false).await?;
+    let mut out = BTreeSet::new();
+    let mut page: Option<String> = None;
+    for _ in 0..MAX_PAGES {
+        let mut query = vec![
+            ("space", space.to_string()),
+            ("repo", repo.to_owned()),
+            ("limit", PAGE_SIZE.to_owned()),
+        ];
+        if let Some(c) = &page {
+            query.push(("cursor", c.clone()));
+        }
+        let r = transport
+            .send(Request {
+                method: Method::Get,
+                base: id.pds.clone(),
+                nsid: "com.atproto.space.listRecords",
+                query,
+                headers: cred.headers(repo),
+                body: None,
+            })
+            .await?;
+        let j = json_body(&r)?;
+        let records = j["records"]
+            .as_array()
+            .ok_or(SyncError::Malformed("listRecords records"))?;
+        for e in records {
+            let text = |k: &str| {
+                e[k].as_str()
+                    .map(str::to_owned)
+                    .ok_or(SyncError::Malformed("listRecords entry"))
+            };
+            let cid =
+                Cid::parse(&text("cid")?).map_err(|_| SyncError::Malformed("listRecords cid"))?;
+            out.insert((text("collection")?, text("rkey")?, cid));
+            if out.len() > MAX_LIST_ENTRIES {
+                return Err(SyncError::Malformed("listRecords too long"));
+            }
+        }
+        match j["cursor"].as_str() {
+            Some(c) if !records.is_empty() && page.as_deref() != Some(c) => {
+                page = Some(c.to_owned())
+            }
+            _ => return Ok(out),
+        }
+    }
+    Err(SyncError::Malformed("listRecords never ended"))
+}
+
 fn verify_commit(
     commit: &Commit,
     repo: &str,
@@ -388,8 +522,9 @@ fn cid_field(v: Option<&Value>) -> Result<Option<Cid>, SyncError> {
 ///
 /// [`SyncError::DigestMismatch`], [`SyncError::Gap`],
 /// [`SyncError::RecordMismatch`] (or an `InvalidCursor` from the host) mean
-/// the log can't bridge the gap: fetch the repo in full. A failed MAC is
-/// retried once with the account's KEM key re-resolved.
+/// the log can't bridge the gap: fetch the repo in full. A failed MAC, or
+/// `RepoDeactivated`, is retried once with the account's DID document
+/// re-resolved.
 pub async fn fetch_ops<T, D2, H>(
     transport: &T,
     directory: &D2,
@@ -608,6 +743,9 @@ fn needs_full_fetch(e: &SyncError) -> bool {
 /// - A writer whose host has no repo for it (`RepoNotFound`) is
 ///   [`RepoChange::Replaced`] with no records, if anything was held.
 /// - A repo older than its cursor is refused as `Failed`.
+/// - A repo its host refuses with `RecordsTakendown` is
+///   [`RepoChange::TakenDown`], with what `listRecords` still lists.
+/// - A repo without a cursor is fetched in full: drop cursors to resync.
 pub async fn sync_space<T, D2, H>(
     transport: &T,
     directory: &D2,
@@ -685,6 +823,23 @@ where
                 if held_cursor.is_some() {
                     changes.push(gone());
                 }
+            }
+            Err(error) if error.is_records_takendown() => {
+                if let Some(c) = held_cursor {
+                    next.repos.insert(repo.to_owned(), c.clone());
+                }
+                changes.push(
+                    match list_records(transport, directory, cred, repo, now).await {
+                        Ok(listed) => RepoChange::TakenDown {
+                            repo: repo.to_owned(),
+                            listed,
+                        },
+                        Err(_) => RepoChange::Failed {
+                            repo: repo.to_owned(),
+                            error,
+                        },
+                    },
+                );
             }
             Err(error) => {
                 if let Some(c) = held_cursor {
@@ -801,6 +956,7 @@ mod tests {
         pub const R1: &str = "3mbaaaaaaab22";
         pub const R2: &str = "3mbaaaaaaab33";
         pub const R3: &str = "3mbaaaaaaab44";
+        pub const OLD_PDS: &str = "https://pds.example";
 
         pub fn block_on<F: Future>(f: F) -> F::Output {
             let mut f = pin!(f);
@@ -854,6 +1010,13 @@ mod tests {
             pub bad_mac_from_page: Option<usize>,
             /// How many requests reached the host.
             pub requests: std::sync::atomic::AtomicUsize,
+            /// The account moved here: only a refreshed resolve says so, and
+            /// the old host answers repo requests `RepoDeactivated`.
+            pub moved_to: Option<&'static str>,
+            /// `getRepo` answers `RecordsTakendown`; `listRecords` lists
+            /// `listed`.
+            pub records_takendown: bool,
+            pub listed: Vec<Value>,
         }
 
         /// Which page a request asks for.
@@ -880,6 +1043,9 @@ mod tests {
                     writer_pages: Vec::new(),
                     bad_mac_from_page: None,
                     requests: Default::default(),
+                    moved_to: None,
+                    records_takendown: false,
+                    listed: Vec::new(),
                 }
             }
 
@@ -943,11 +1109,23 @@ mod tests {
                     let body = json!({ "repos": repos }).to_string();
                     return Ok(reply(200, vec![], body.into_bytes()));
                 }
-                if let Some(name) = self.refuse {
+                let refuse = match (self.refuse, self.moved_to) {
+                    (Some(name), _) => Some(name),
+                    (None, Some(_)) if req.base == OLD_PDS => Some("RepoDeactivated"),
+                    _ if self.records_takendown && req.nsid == "com.atproto.space.getRepo" => {
+                        Some("RecordsTakendown")
+                    }
+                    _ => None,
+                };
+                if let Some(name) = refuse {
                     let body = json!({ "error": name }).to_string();
                     return Ok(reply(400, vec![], body.into_bytes()));
                 }
                 match req.nsid {
+                    "com.atproto.space.listRecords" => {
+                        let body = json!({ "records": self.listed }).to_string();
+                        Ok(reply(200, vec![], body.into_bytes()))
+                    }
                     "com.atproto.space.getRepo" => {
                         let body = write_repo_archive(
                             &self.commit(),
@@ -985,8 +1163,12 @@ mod tests {
                     (Some(stale), false) => stale.clone(),
                     _ => real,
                 };
+                let pds = match (self.moved_to, refresh) {
+                    (Some(new), true) => new,
+                    _ => OLD_PDS,
+                };
                 Ok(Identity {
-                    pds: "https://pds.example".into(),
+                    pds: pds.into(),
                     signing_key: None,
                     kem_key: Some(kem_key),
                     label_key: None,
@@ -1363,6 +1545,160 @@ mod tests {
             SyncError::Gap("MAC failed partway through the log")
         );
         assert_eq!(host.requests.load(Relaxed), 2);
+    }
+
+    #[test]
+    fn a_host_change_drops_the_cursor_and_fetches_in_full() {
+        let (_, zb, z) = post("z");
+        let host = Host::new(R1, vec![(zb.clone(), z)]);
+        let held = |_: &str, _: &str, _: &str| Some(z);
+        let mut cursor = holding(R1, &[(zb.clone(), z)]);
+        // Unchanged: skipped, nothing fetched.
+        let (_, changes) = block_on(sync_space(&host, &host, &cred(), &cursor, &held, 0)).unwrap();
+        assert!(changes.is_empty(), "{changes:?}");
+        // The writer moved: its cursor goes, and the repo comes whole. Not
+        // the authority, so no new credential.
+        assert!(!host_changed(&mut cursor, &space(), REPO));
+        assert!(cursor.repos.is_empty());
+        let (next, changes) =
+            block_on(sync_space(&host, &host, &cred(), &cursor, &held, 0)).unwrap();
+        assert!(
+            matches!(changes.as_slice(), [RepoChange::Replaced { records, .. }] if records.len() == 1),
+            "{changes:?}"
+        );
+        assert_eq!(next.repos[REPO].rev, R1);
+        // The authority moving says to authorize again.
+        let mut c = holding(R1, &[(zb, z)]);
+        assert!(host_changed(&mut c, &space(), space().authority()));
+        assert_eq!(c.repos.len(), 1);
+    }
+
+    #[test]
+    fn a_dropped_cursor_fetches_the_repo_whole() {
+        let (_, zb, z) = post("z");
+        let (yv, yb, y) = post("y");
+        // The op log would bridge R1 to R2, but the daily resync drops the
+        // cursor: getRepo, not listRepoOps.
+        let mut host = Host::new(R2, vec![(yb, y)]);
+        host.ops = json!([op_entry(R2, Some(y), Some(z), Some(yv))]);
+        let held = |_: &str, _: &str, _: &str| Some(z);
+        let (_, changes) = block_on(sync_space(
+            &host,
+            &host,
+            &cred(),
+            &holding(R1, &[(zb, z)]),
+            &held,
+            0,
+        ))
+        .unwrap();
+        assert!(matches!(changes.as_slice(), [RepoChange::Ops { .. }]));
+        let (_, changes) = block_on(sync_space(
+            &host,
+            &host,
+            &cred(),
+            &SpaceCursor::default(),
+            &held,
+            0,
+        ))
+        .unwrap();
+        assert!(matches!(changes.as_slice(), [RepoChange::Replaced { .. }]));
+    }
+
+    #[test]
+    fn records_takendown_keeps_the_cursor_and_lists_what_stays() {
+        let (_, zb, z) = post("z");
+        let (_, _, y) = post("y");
+        let mut host = Host::new(R2, vec![(zb.clone(), z)]);
+        host.records_takendown = true;
+        host.listed = vec![
+            json!({ "collection": POST, "rkey": RKEY, "cid": y.to_string() }),
+            json!({ "collection": POST, "rkey": "3mbaaaaaaaaa3", "cid": z.to_string(), "value": {} }),
+        ];
+        let held = |_: &str, _: &str, _: &str| Some(z);
+        // The daily resync, without a cursor.
+        let (next, changes) = block_on(sync_space(
+            &host,
+            &host,
+            &cred(),
+            &SpaceCursor::default(),
+            &held,
+            0,
+        ))
+        .unwrap();
+        let want = BTreeSet::from([
+            (POST.to_owned(), RKEY.to_owned(), y),
+            (POST.to_owned(), "3mbaaaaaaaaa3".to_owned(), z),
+        ]);
+        assert_eq!(
+            changes,
+            [RepoChange::TakenDown {
+                repo: REPO.into(),
+                listed: want.clone()
+            }]
+        );
+        assert!(next.repos.is_empty());
+        // With a cursor the op log can't bridge: the cursor is kept.
+        let cursor = holding(R1, &[]);
+        host.ops = json!([]);
+        let (next, changes) =
+            block_on(sync_space(&host, &host, &cred(), &cursor, &held, 0)).unwrap();
+        assert!(
+            matches!(changes.as_slice(), [RepoChange::TakenDown { listed, .. }] if *listed == want)
+        );
+        assert_eq!(next, cursor);
+        // A listing that fails leaves a plain failure.
+        host.listed = vec![json!({ "collection": POST })];
+        let (_, changes) = block_on(sync_space(&host, &host, &cred(), &cursor, &held, 0)).unwrap();
+        assert!(
+            matches!(changes.as_slice(), [RepoChange::Failed { error, .. }] if error.is_records_takendown())
+        );
+    }
+
+    #[test]
+    fn a_deactivated_repo_is_retried_at_its_new_host() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let (_, zb, z) = post("z");
+        let mut host = Host::new(R1, vec![(zb, z)]);
+        host.moved_to = Some("https://new.example");
+        let (cursor, records) = block_on(fetch_repo(&host, &host, &cred(), REPO, 0)).unwrap();
+        assert_eq!((cursor.rev.as_str(), records.len()), (R1, 1));
+        assert_eq!(host.requests.load(Relaxed), 2);
+    }
+
+    #[test]
+    fn missing_spaces_after_a_move() {
+        let err = |name: &str| SyncError::Xrpc {
+            status: 400,
+            error: crate::error::XrpcName::new(name),
+        };
+        let h = 3600;
+        // Deleted: dropped, moved or not.
+        assert_eq!(
+            missing_space(&err("SpaceDeleted"), false, 0, 0),
+            MissingSpace::Drop
+        );
+        // Not found without a move: kept, as before.
+        assert_eq!(
+            missing_space(&err("SpaceNotFound"), false, 0, 100 * h),
+            MissingSpace::Keep
+        );
+        // After a move: unserved at once, dropped after 72 hours.
+        assert_eq!(
+            missing_space(&err("SpaceNotFound"), true, 10, 10),
+            MissingSpace::Unserved
+        );
+        assert_eq!(
+            missing_space(&err("SpaceNotFound"), true, 10, 10 + 72 * h - 1),
+            MissingSpace::Unserved
+        );
+        assert_eq!(
+            missing_space(&err("SpaceNotFound"), true, 10, 10 + 72 * h),
+            MissingSpace::Drop
+        );
+        assert_eq!(
+            missing_space(&SyncError::DigestMismatch, true, 0, 100 * h),
+            MissingSpace::Keep
+        );
     }
 
     #[test]

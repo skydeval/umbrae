@@ -16,6 +16,11 @@
 //! 3. On a notification ([`notify::parse_notification`], token checked with
 //!    [`notify::token_matches`]), sync again. Renew the credential before
 //!    [`Credential::expires_at`] with a fresh delegation.
+//! 4. At least once a day, drop every repo's cursor before syncing, so each
+//!    repo is fetched whole; on an `#identity` event that moves an account,
+//!    call [`host_changed`], and on a `SpaceNotFound` after it,
+//!    [`missing_space`]. A [`RepoChange::TakenDown`] keeps only what the
+//!    host still lists.
 //!
 //! Who may see what is the `umbrae` crate's job, from the records synced
 //! here.
@@ -31,8 +36,9 @@ mod validate;
 pub use credential::{authorize, Authorize, Credential, Notify};
 pub use error::{SyncError, XrpcName};
 pub use sync::{
-    fetch_ops, fetch_repo, list_writers, sync_space, Op, RepoChange, RepoCursor, SpaceCursor,
-    SyncedRecord, Writer, Writers,
+    fetch_ops, fetch_repo, host_changed, list_records, list_writers, missing_space, sync_space,
+    MissingSpace, Op, RepoChange, RepoCursor, SpaceCursor, SyncedRecord, Writer, Writers,
+    MISSING_AFTER_MOVE,
 };
 pub use transport::{
     Directory, Identity, Method, Request, ResolveError, Response, Transport, TransportError,

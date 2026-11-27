@@ -12,6 +12,16 @@
 //! - a reason's `group`, if set, is one of the record's `groups`;
 //! - label keys are valid `did:key`s, unique, and previous keys need a
 //!   current one.
+//!
+//! A label has one home. An unrestricted label on a hidden post or repost
+//! in a community or everyone space may instead be a
+//! `com.atproto.label.record` in the subject's own space, where the labeler
+//! is a label writer
+//! ([`crate::validate_space_label`]). Every other label stays here,
+//! including every label on group and followers posts, and so does one from
+//! a labeler that isn't a label writer in the subject's space. Readers
+//! accept both homes, so a labeler may move a label: it writes the in-space
+//! record first, then deletes this one.
 
 use crate::validate::{is_datetime, is_language, string, Invalid, PublicUri};
 use crate::{
@@ -588,7 +598,7 @@ fn strings(m: &Map, key: &str, ok: impl Fn(&str) -> bool) -> Result<Option<Vec<S
     }
 }
 
-fn text(m: &Map, key: &str) -> Result<Option<String>, Invalid> {
+pub(crate) fn text(m: &Map, key: &str) -> Result<Option<String>, Invalid> {
     match m.get(key) {
         None => Ok(None),
         Some(Value::Text(t)) => Ok(Some(t.clone())),
@@ -596,7 +606,7 @@ fn text(m: &Map, key: &str) -> Result<Option<String>, Invalid> {
     }
 }
 
-fn datetime(m: &Map, key: &str) -> Result<Option<String>, Invalid> {
+pub(crate) fn datetime(m: &Map, key: &str) -> Result<Option<String>, Invalid> {
     match m.get(key) {
         None => Ok(None),
         Some(Value::Text(t)) if is_datetime(t) => Ok(Some(t.clone())),

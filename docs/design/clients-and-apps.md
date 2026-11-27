@@ -16,6 +16,7 @@
 | a private account's own private space (create it, move records in and out, write the rules, change serving app) | `space:tools.umbrae.private?collection=app.bsky.feed.post&collection=app.bsky.feed.repost&collection=app.bsky.feed.like&collection=app.bsky.feed.threadgate&collection=app.bsky.feed.postgate&collection=tools.umbrae.private.rules&manage=create&manage=update&manage=delete` |
 | replying, liking, reposting and quoting in others' private spaces | `space:tools.umbrae.private?authority=*&collection=app.bsky.feed.post&collection=app.bsky.feed.repost&collection=app.bsky.feed.like&collection=app.bsky.feed.postgate` |
 | a private account's serving app, keeping its own followers-space access | `space:tools.umbrae.space?skey=followers&action=read` |
+| a labeler writing and deleting in-space labels in others' spaces (not yet checked against a PDS) | `space:tools.umbrae.space?authority=*&collection=com.atproto.label.record&action=create&action=delete` |
 
 `manage=create` covers `createSpace`, `manage=update` covers `putMembers`, `removeMembers` and `updateSpace`, and `manage=delete` covers `deleteSpace`.
 
@@ -51,7 +52,32 @@ A community's app reads members' community spaces without a delegation: step 2 a
 - update notifications (`notifySpaceUpdate`);
 - validation by space type.
 
-A space type it doesn't handle, such as a list space, comes back as unknown and is never served.
+A space type it doesn't handle, such as a list space, comes back as unknown and is never served. A `com.atproto.label.record` in an Umbrae or private space comes back as its own kind (`Checked::SpaceLabel`); whose count is the `umbrae` crate's rule.
+
+### Keeping a copy honest
+
+- **A daily full fetch.** Op replay never learns that a host took a record down, so at least once a day the app drops each repo's cursor before `sync_space`, and every repo is fetched with `getRepo`.
+- **`RecordsTakendown`** (atproto-pds): while any record in a repo is taken down at its host, `getRepo` refuses the whole repo. `sync_space` reports `RepoChange::TakenDown`: the cursor is kept, and the app serves only the held records whose `(collection, rkey, cid)` `listRecords` still lists, dropping the rest. That listing isn't verified, so it only ever removes. A record `listRepoOps` returns but `listRecords` doesn't list is never served.
+- **Known limit:** atproto-pds still returns a taken-down record's value in `listRepoOps`, so op replay can serve it for up to a day, until the next full fetch.
+
+## Blobs
+
+- **Write the record right after the upload.** atproto-pds deletes a blob nothing references after a grace period (24 hours by default). Clients write the record referencing a blob in the same flow as its `uploadBlob`; if that write didn't happen, upload again. This covers post images and video, profile avatars, banners and link icons, and labeler profile images.
+- **Drafts** keep a blob's bytes locally, never just its CID.
+- **Replacing a blob** drops the old one once nothing references it: at once on the reference PDS, after the grace on atproto-pds. `BlobNotFound` for a blob no current record names is normal; for one a current record names, the blob is unavailable, not an error.
+
+## Moving to another PDS
+
+Space URIs name DIDs, never hosts, so no record is rewritten when an account moves. Notification registrations, credential revocations and deleted-space tombstones don't carry over, and the new host has its own `#atproto_kem` key and an empty op log.
+
+- **Syncing apps** watch `#identity` events for every authority and writer whose spaces they sync. When an account's `#atproto_pds` changes, `host_changed` drops its repo's cursor, so its repos are fetched in full once; the app drops its cached endpoint and KEM key, and for an authority authorizes again at the new host, registering for notifications again. A `RepoDeactivated` from a host is retried once with the DID document resolved afresh.
+- **Already handled:** a failed MAC is retried with the KEM key re-resolved, and an op log that can't bridge the cursor falls back to a full fetch.
+- **A space deleted before the move** answers `SpaceNotFound` at the new host. After a host change, `missing_space` says to stop serving it at once and drop its copy after 72 hours unless it answers again. Before any host change, only `SpaceDeleted` drops data.
+- **Lost revocations:** for up to 60 minutes the new host may accept a credential the old one revoked, within the existing bound of an hour.
+- **Community spaces** keep their policy, `managingApp` included, and the new host asks the same `checkAccess`. After migrating, the writer's client calls `registerSpace` at each community app where it's a writer.
+- **Groups:** policy and members move with the space. Members' repos don't move.
+- **The hidden profile:** see [Moving to another PDS](accounts.md#moving-to-another-pds).
+- **A labeler** moves its in-space labels with its repos, one space at a time. They aren't signed, so nothing is re-signed. Its labeler space moves as any authority's space, and its `labelKey` is in its policies record.
 
 ## Detecting spaces support
 

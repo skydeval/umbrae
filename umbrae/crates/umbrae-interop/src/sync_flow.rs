@@ -138,6 +138,9 @@ fn serve_notifications(inbox: Arc<Mutex<Inbox>>) {
                             &body,
                             authorization.as_deref(),
                         )
+                    })
+                    .or_else(|| {
+                        crate::label_space_flow::handle(req.url(), authorization.as_deref())
                     });
             let mut ib = inbox.lock().unwrap();
             let expected = ib.token.clone().unwrap_or_default();
@@ -202,9 +205,9 @@ fn wait_for(
 }
 
 /// The app's copy of the space, by record: the CID it holds.
-type Store = BTreeMap<(String, String, String), Cid>;
+pub(crate) type Store = BTreeMap<(String, String, String), Cid>;
 
-fn apply(store: &mut Store, changes: &[RepoChange]) {
+pub(crate) fn apply(store: &mut Store, changes: &[RepoChange]) {
     for c in changes {
         match c {
             RepoChange::Replaced { repo, records } => {
@@ -229,12 +232,15 @@ fn apply(store: &mut Store, changes: &[RepoChange]) {
             }
             RepoChange::Removed { repo } => store.retain(|k, _| &k.0 != repo),
             RepoChange::Failed { .. } => {}
+            RepoChange::TakenDown { repo, listed } => store.retain(|k, cid| {
+                &k.0 != repo || listed.contains(&(k.1.clone(), k.2.clone(), *cid))
+            }),
             other => panic!("unhandled repo change {other:?}"),
         }
     }
 }
 
-fn lookup(store: &Store) -> impl Fn(&str, &str, &str) -> Option<Cid> + Sync + '_ {
+pub(crate) fn lookup(store: &Store) -> impl Fn(&str, &str, &str) -> Option<Cid> + Sync + '_ {
     |repo: &str, collection: &str, rkey: &str| {
         store
             .get(&(repo.to_owned(), collection.to_owned(), rkey.to_owned()))

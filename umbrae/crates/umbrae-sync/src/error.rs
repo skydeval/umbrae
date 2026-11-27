@@ -73,6 +73,23 @@ impl SyncError {
         self.is_xrpc("RepoNotFound")
     }
 
+    /// Whether the host said the space was deleted (its tombstone).
+    pub fn is_space_deleted(&self) -> bool {
+        self.is_xrpc("SpaceDeleted")
+    }
+
+    /// Whether the host refused a whole repo because a record in it is
+    /// taken down (atproto-pds `getRepo`).
+    pub fn is_records_takendown(&self) -> bool {
+        self.is_xrpc("RecordsTakendown")
+    }
+
+    /// Whether the host said the account is deactivated there, as an old
+    /// host may after the account moved.
+    pub fn is_repo_deactivated(&self) -> bool {
+        self.is_xrpc("RepoDeactivated")
+    }
+
     fn is_xrpc(&self, name: &str) -> bool {
         matches!(self, SyncError::Xrpc { error, .. } if error.as_str() == name)
     }

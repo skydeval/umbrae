@@ -31,6 +31,19 @@ Hidden means hidden from the public and from people outside the audience, **not 
 - Moderators are never added to a space's member list automatically. Authors can't opt out, and the community's terms cover it.
 - The serving app's moderators may see private accounts through its moderation paths.
 
+## Takedowns
+
+Two sets of rules apply, and they stay apart.
+
+- **Spaces in general**, any space type a serving app serves:
+  - **The authority's `!takedown`:** a `com.atproto.label.record` with `val` `!takedown` in the authority's repo, naming a record in that space, takes the record out of the app's views for everyone, its author included. The app keeps the record, and deleting the label brings it back. It applies to any collection; one naming another space, an account or the space itself is ignored, and so is one with `neg: true`.
+  - **Whose:** the authority's only. Another writer's `!takedown` is an ordinary label value, which an app may honor from labelers it trusts.
+  - **A switch:** honoring it is a per-space-type setting in the serving app's spaces configuration, on by default. This covers `tools.umbrae.private`.
+  - **Infrastructure takedowns** stay where the spaces spec puts them: a PDS takes down accounts and blobs, a space host authorities, an AppView accounts, spaces and records.
+- **Umbrae spaces** (`tools.umbrae.space`): the authority's `!takedown` is always honored, not a setting, and in a community space the community's named labeler's counts too. See [Takedowns](hidden-posts.md#takedowns).
+
+Moderators and the community's labeler service take content down at the serving app, through its moderation paths.
+
 ## Space URIs
 
 Space URIs follow the spaces spec:

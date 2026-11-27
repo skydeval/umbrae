@@ -21,6 +21,16 @@ The avatar, banner and link icons are blobs referenced only from the profile spa
 - everyone else gets them through `tools.umbrae.actor.getProfileBlob` from their serving app, which serves a blob only to someone who may see the profile and only if the profile refers to it;
 - the public `sync.getBlob` doesn't serve them.
 
+### Moving to another PDS
+
+Space URIs name DIDs, never hosts, so no record is rewritten when an account moves. What's lost is host-side state: notification registrations, credential revocations and deleted-space tombstones.
+
+- **Before migrating:** the owner's client finishes the move from copies (step 5 of [Moving from copies](communities.md#moving-from-copies), deleting every copy).
+- **After migrating:** the client runs the "after every write" steps once: a fresh delegation to each serving app, and `registerProfile` at each community app its audiences name.
+- **A lost tombstone:** a profile space deleted before the move answers `SpaceNotFound` at the new host, not `SpaceDeleted`, so a reader could fall back to legacy copies. The copy fallback is **sticky per DID** at the serving app: once it has seen an owner's profile space or its tombstone, it never falls back to copies for that DID, on any host. The serving app keeps that in its own table.
+- `allowedApps` moves with the policy, and the member list stays empty.
+- **Blobs:** they're copied after the repos are imported, so the imported records already reference them.
+
 ## Hidden follows
 
 `tools.umbrae.follow {subject: did, createdAt}` lives in the follower's own only-me space, with a TID key. It feeds a hidden Following timeline. It's separate from approval into a private account: membership is the access, and the follow is the follower's own list.

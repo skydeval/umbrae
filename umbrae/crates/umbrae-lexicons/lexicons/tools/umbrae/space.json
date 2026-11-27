@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "space",
-      "description": "One author's hidden posts for one group of people. The author is the space authority; the space is a memberspace (or a personalspace for only-me) whose member list is published to members only. A group's key is a TID; a private account's approved followers use the key followers; only-me uses the key self. Special keys: self (only me), followers (a private account's approved followers), everyone (everyone with Umbrae, a managedspace), c- followed by 32 base32 characters (one author's space for a community, derived from the community's ref: a managedspace naming the community's app, which holds membership and is its only reader), profile (the owner's one hidden profile: a memberspace with no members, read by the owner's serving app).",
+      "description": "One author's hidden posts for one group of people. The author is the space authority; the space is a memberspace (or a personalspace for only-me) whose member list is published to members only. A group's key is a TID; a private account's approved followers use the key followers; only-me uses the key self. Special keys: self (only me), followers (a private account's approved followers), everyone (everyone with Umbrae, a managedspace), c- followed by 32 base32 characters (one author's space for a community, derived from the community's ref: a managedspace naming the community's app, which holds membership and is its only reader), profile (the owner's one hidden profile: a memberspace with no members, read by the owner's serving app). In-space labels (com.atproto.label.record): the authority's !takedown takes a record down; other labels count only from the space's label writers. In an everyone space, those are its non-authority writers, where the reader trusts them as labelers; in a community space, the community's named labeler, whose !takedown is the community's; in a group or followers space, its members, where the reader trusts them as labelers; in any other space, none.",
       "key": "any",
       "title": "Umbrae hidden posts",
       "collections": [
@@ -21,7 +21,8 @@
         "tools.umbrae.threadgate",
         "tools.umbrae.postgate",
         "tools.umbrae.feed",
-        "tools.umbrae.listSubscription"
+        "tools.umbrae.listSubscription",
+        "com.atproto.label.record"
       ]
     }
   }

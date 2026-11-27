@@ -20,6 +20,10 @@
 //! - **A record** shows only if its author is the authority or a member
 //!   with `write` (a removed member's records drop out), and its author is
 //!   active. In a community space, only the authority, while a writer.
+//! - **Taken down:** a record in `taken_down` shows to nobody, its author
+//!   included ([`crate::labeler::apply_takedowns`]).
+//! - **Label writers** ([`is_label_writer`]) are whose in-space labels
+//!   count. They're never members, and `is_writer` doesn't count them.
 //! - **Always:** a block between viewer and authority or record author
 //!   hides it; an inactive authority hides the whole space; a deleted space
 //!   shows nothing; nobody signed out sees anything.
@@ -28,14 +32,17 @@
 //! A reader can't tell unreadable from missing: callers omit denied records
 //! from lists and answer not-found for a single fetch.
 
-use crate::space::{check_community_policy, check_policy, is_community_space, is_only_me};
-use std::collections::BTreeMap;
+use crate::space::{
+    check_community_policy, check_policy, is_community_space, is_managed, is_only_me,
+};
+use std::collections::{BTreeMap, BTreeSet};
 use umbrae_core::drisl::Value;
 use umbrae_core::policy::{
     record_key_to_did, MemberAccess, Policy, MEMBER_RECORD, POLICY_RECORD, POLICY_RECORD_RKEY,
 };
+use umbrae_core::uri::is_valid_tid;
 use umbrae_core::uri::{SpaceRecordUri, SpaceRef};
-use umbrae_lexicons::CommunityRef;
+use umbrae_lexicons::{CommunityRef, FOLLOWERS_SKEY, PRIVATE_SPACE_TYPE, SPACE_TYPE};
 
 type Map = BTreeMap<String, Value>;
 
@@ -94,6 +101,16 @@ pub struct SpaceState {
     /// from its own table. Without it, nobody but the authority sees the
     /// space.
     pub community: Option<CommunityRef>,
+    /// Accounts whose in-space labels may count here ([`is_label_writer`]),
+    /// never members. A community's app fills it with the community's named
+    /// labeler; any reader of an everyone space, with the writer set minus
+    /// the authority. A managing app keeps a writer here after a
+    /// `removeWriter`, with its last-synced labels, until it syncs their
+    /// deletion. Empty elsewhere.
+    pub label_writers: BTreeSet<String>,
+    /// Records taken down by `!takedown`, as `(author, collection, rkey)`.
+    /// Filled by [`crate::labeler::apply_takedowns`].
+    pub taken_down: BTreeSet<(String, String, String)>,
 }
 
 impl SpaceState {
@@ -104,6 +121,8 @@ impl SpaceState {
             members: Members::default(),
             deleted: false,
             community: None,
+            label_writers: BTreeSet::new(),
+            taken_down: BTreeSet::new(),
         }
     }
 
@@ -134,6 +153,16 @@ impl SpaceState {
 
     fn authority(&self) -> &str {
         self.space.authority()
+    }
+
+    /// Whether a `!takedown` hides the record.
+    pub fn is_taken_down(&self, uri: &SpaceRecordUri) -> bool {
+        uri.space() == &self.space
+            && self.taken_down.contains(&(
+                uri.author().to_owned(),
+                uri.collection().to_owned(),
+                uri.rkey().to_owned(),
+            ))
     }
 
     /// For a community space: the ref is set, the policy passes
@@ -200,6 +229,32 @@ pub fn is_writer(author: &str, state: &SpaceState) -> bool {
     author == state.authority() || state.member(author).write
 }
 
+/// Whether `author`'s in-space labels (`com.atproto.label.record`) may
+/// count in the space; the reader's trust in that labeler decides the rest.
+/// Never the authority, whose `!takedown` counts by its own rule
+/// ([`crate::labeler::apply_takedowns`]).
+/// - **A community or everyone space:** an account in `label_writers`.
+/// - **A group or followers space:** a member with `write`. Umbrae never
+///   lists a labeler there; one the owner adds is an ordinary member.
+/// - **A private account's space:** an account in `label_writers`, which
+///   its serving app fills with the writer set minus the authority.
+/// - **Any other space:** nobody.
+pub fn is_label_writer(author: &str, state: &SpaceState) -> bool {
+    let space = &state.space;
+    if author == space.authority() {
+        return false;
+    }
+    let listed = state.label_writers.contains(author);
+    match space.space_type() {
+        SPACE_TYPE if is_managed(space) => listed,
+        SPACE_TYPE if is_valid_tid(space.skey()) || space.skey() == FOLLOWERS_SKEY => {
+            state.member(author).write
+        }
+        PRIVATE_SPACE_TYPE => listed,
+        _ => false,
+    }
+}
+
 /// Whether two states are spaces of one community: both community spaces
 /// of the same type and key, mapped to the same ref, and each passing
 /// [`check_community_policy`] for it. A lookalike naming another app fails.
@@ -231,6 +286,7 @@ pub fn can_view_record(
     uri.space() == &state.space
         && can_view_space(viewer, state, ctx)
         && is_writer(author, state)
+        && !state.is_taken_down(uri)
         && ctx.is_active(author) == Tri::Yes
         && (viewer == Some(author) || viewer.is_some_and(|v| ctx.blocked(v, author) == Tri::No))
 }
@@ -739,6 +795,92 @@ mod tests {
         let mut s = group();
         s.deleted = true;
         assert!(!can_view_space(Some(ALICE), &s, &c));
+    }
+
+    #[test]
+    fn label_writers_by_space() {
+        const LABELER: &str = "did:plc:labelerllllllllllllllll";
+        let listed = |mut s: SpaceState| {
+            s.label_writers.insert(LABELER.to_owned());
+            s.label_writers.insert(ALICE.to_owned());
+            s
+        };
+        // A community: only its named labeler, never a member or the
+        // authority; and it isn't a writer or a member.
+        let c = listed(community_space_of(ALICE, &[]));
+        assert!(is_label_writer(LABELER, &c));
+        assert!(!is_label_writer(BOB, &c) && !is_label_writer(ALICE, &c));
+        assert!(!is_writer(LABELER, &c) && c.members.get(LABELER).is_none());
+        assert!(!is_label_writer(LABELER, &community_space_of(ALICE, &[])));
+        // Everyone: whoever the reader listed from the writer set.
+        let e = listed(SpaceState::new(
+            everyone_space(ALICE).unwrap(),
+            Some(managed_policy(APP)),
+        ));
+        assert!(is_label_writer(LABELER, &e) && !is_label_writer(BOB, &e));
+        assert!(!is_label_writer(ALICE, &e));
+        // A group or followers space: a member with write, whatever's
+        // listed; a reader or an outsider isn't.
+        let g = listed(group());
+        assert!(is_label_writer(BOB, &g));
+        assert!(!is_label_writer(DAVE, &g) && !is_label_writer(LABELER, &g));
+        assert!(!is_label_writer(ALICE, &g));
+        let mut f = SpaceState::new(
+            crate::space::followers_space(ALICE).unwrap(),
+            Some(group_policy(None)),
+        );
+        f.members.insert(BOB, rw(true, true));
+        assert!(is_label_writer(BOB, &f) && !is_label_writer(CAROL, &f));
+        // Only-me, the profile, a list and a labeler space: nobody.
+        let mut me = listed(SpaceState::new(
+            only_me_space(ALICE).unwrap(),
+            Some(only_me_policy()),
+        ));
+        me.members.insert(BOB, rw(true, true));
+        let mut profile = listed(SpaceState::new(
+            crate::space::profile_space(ALICE).unwrap(),
+            Some(group_policy(None)),
+        ));
+        profile.members.insert(BOB, rw(true, true));
+        let list = listed(SpaceState::new(
+            crate::space::list_space(ALICE, SKEY).unwrap(),
+            Some(crate::space::list_policy(None)),
+        ));
+        let labeler = listed(SpaceState::new(
+            crate::labeler::labeler_space(ALICE).unwrap(),
+            Some(crate::labeler::labeler_policy(vec![
+                "https://a.example/c.json".into(),
+            ])),
+        ));
+        for s in [&me, &profile, &list, &labeler] {
+            assert!(!is_label_writer(LABELER, s) && !is_label_writer(BOB, s));
+        }
+        // A private account's space: whoever its app listed.
+        let p = listed(SpaceState::new(
+            crate::space::private_space(ALICE).unwrap(),
+            Some(managed_policy(APP)),
+        ));
+        assert!(is_label_writer(LABELER, &p) && !is_label_writer(BOB, &p));
+    }
+
+    #[test]
+    fn taken_down_records_show_to_nobody() {
+        let c = Ctx::default();
+        let mut s = group();
+        let reply = post(BOB);
+        s.taken_down
+            .insert((BOB.into(), POST.into(), "3mbaaaaaaaaa2".into()));
+        assert!(s.is_taken_down(&reply));
+        for v in [ALICE, BOB, DAVE] {
+            assert!(!can_view_record(Some(v), &reply, &s, &c), "{v}");
+        }
+        // The space and its other records are unaffected.
+        assert!(can_view_space(Some(DAVE), &s, &c));
+        assert!(can_view_record(Some(DAVE), &post(ALICE), &s, &c));
+        // The same key in another space isn't taken down.
+        let other = SpaceState::new(group_space(ALICE, "3mbbbbbbbbbb3").unwrap(), None);
+        let elsewhere = other.space.record(BOB, POST, "3mbaaaaaaaaa2").unwrap();
+        assert!(!s.is_taken_down(&elsewhere));
     }
 
     #[test]

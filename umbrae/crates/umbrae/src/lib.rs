@@ -15,7 +15,8 @@
 //!   and list subscriptions.
 //! - [`profile`]: the one hidden profile and the audiences it lists.
 //! - [`labeler`]: private labelers: the space, its policy and readers,
-//!   label signatures, and which labels are in effect.
+//!   label signatures, and which labels are in effect, in the labeler
+//!   space or in the subject's own space; and `!takedown`.
 //! - [`private`]: private accounts: who passes the owner's rules, which
 //!   interactions count, and what stays inside when going public.
 //!

@@ -1,5 +1,8 @@
 //! Interop harness: a syncer built on `umbrae-core`, run against the
-//! reference spaces PDS (`ghcr.io/bluesky-social/atproto:pds-spaces-alpha`).
+//! reference spaces PDS (`ghcr.io/bluesky-social/atproto:pds-spaces-alpha`)
+//! or, with `PDS_IMPL=crates`, against atproto-crates' `atproto-pds`.
+//! Where the two answer differently, [`DIFFERENCES`] says so; it's the only
+//! place an assertion forks.
 //!
 //! It serves a mock PLC directory for the PDS, creates accounts, sets up a
 //! memberspace with a member who writes, and then syncs that member's repo
@@ -12,13 +15,14 @@
 //! `labeler_flow` the private-labeler flow, `sync_flow` the
 //! `umbrae-sync` crate end to end, notifications included, and
 //! `community_flow` a community's per-author spaces against a stand-in
-//! managing app, and `private_flow` a private account against a stand-in
-//! serving app.
+//! managing app, `private_flow` a private account against a stand-in
+//! serving app, and `label_space_flow` in-space labels and takedowns.
 //!
 //! Run by `scripts/interop.sh` on the build machine; never against a public
 //! service.
 
 mod community_flow;
+mod label_space_flow;
 mod labeler_flow;
 mod lexjson;
 mod plc;
@@ -45,6 +49,56 @@ use umbrae_core::{didkey, drisl, LtHash};
 const SPACE_TYPE: &str = "com.example.interop";
 const SKEY: &str = "interop";
 const COLLECTION: &str = "com.example.post";
+
+/// Where the two PDSes answer differently, as `(where, reference,
+/// atproto-pds)`. A check asserting one of these accepts either answer; any
+/// other mismatch fails.
+const DIFFERENCES: &[(&str, &str, &str)] = &[
+    (
+        "a space repo read with no auth",
+        "AuthMissing",
+        "AuthenticationRequired",
+    ),
+    (
+        "a label record failing the lexicon",
+        "InvalidRequest",
+        "InvalidRecord",
+    ),
+    (
+        "a label record with a bad key",
+        "InvalidRequest",
+        "InvalidRecordKey",
+    ),
+    (
+        "another account's repo with a session",
+        "RepoNotFound",
+        "SpaceNotFound",
+    ),
+    ("listWriters with a session", "MissingJwt", "Unauthorized"),
+    (
+        "a legacy blob ref written with validate: false",
+        "refused",
+        "accepted",
+    ),
+    (
+        "a repo outside the writer set, fetched directly",
+        "served",
+        "SpaceNotFound",
+    ),
+];
+
+/// Whether `got` is `want`, or its counterpart in [`DIFFERENCES`].
+fn same_answer(want: &str, got: &str) -> bool {
+    got == want
+        || DIFFERENCES
+            .iter()
+            .any(|(_, r, c)| (*r == want && *c == got) || (*c == want && *r == got))
+}
+
+/// The PDS under test: `PDS_IMPL`, `reference` unless set to `crates`.
+fn crates_pds() -> bool {
+    std::env::var("PDS_IMPL").as_deref() == Ok("crates")
+}
 
 struct Resp {
     status: u16,
@@ -293,7 +347,12 @@ fn main() {
 
 fn run(pds: &Pds, dir: &plc::Directory, report: &mut Report) -> Result<(), String> {
     wait_ready(pds)?;
-    report.check("PDS ready", Ok(pds.url.clone()));
+    let which = if crates_pds() {
+        "atproto-pds"
+    } else {
+        "reference"
+    };
+    report.check("PDS ready", Ok(format!("{} ({which})", pds.url)));
 
     // Accounts. Echo each DID and token length, so a null credential is
     // caught here rather than several steps on.
@@ -785,14 +844,17 @@ fn run(pds: &Pds, dir: &plc::Directory, report: &mut Report) -> Result<(), Strin
     labeler_flow::run(pds, dir, report, &carol)?;
     sync_flow::run(pds, dir, report, &alice, &bob)?;
     community_flow::run(pds, dir, report)?;
-    private_flow::run(pds, dir, report)
+    private_flow::run(pds, dir, report)?;
+    label_space_flow::run(pds, dir, report)
 }
 
 fn expect_refusal(r: &Resp, name: Option<&str>) -> Result<String, String> {
     let got = r.error_name();
     match (r.status, name) {
         (200, _) => Err("accepted".into()),
-        (_, Some(n)) if got != n => Err(format!("HTTP {} {got}, wanted {n}", r.status)),
+        (_, Some(n)) if !same_answer(n, &got) => {
+            Err(format!("HTTP {} {got}, wanted {n}", r.status))
+        }
         (s, _) => Ok(format!("HTTP {s} {got}")),
     }
 }

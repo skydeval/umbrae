@@ -21,7 +21,7 @@ Posts don't live in a shared space. Each writer keeps their records for the comm
 - **Key:** `community_skey(ref)`: `c-` and the first 32 characters of base32lower-nopad(sha256(`"tools.umbrae.community\n" + app + "\n" + key`)), 34 characters in all. It's deterministic, a valid record key, never TID-shaped, and different for every app and key.
 - **Shape:** `is_community_skey` and `is_community_space` accept exactly `c-` plus 32 characters of `[a-z2-7]`. Validation, which sees no ref, uses the shape. The app, which knows the ref, uses the full check.
 - **Policy:** `com.atproto.managedspace.policy {managingApp: app, publishPolicy: true}` (`managed_policy`). `check_community_policy(space, ref, policy)` requires the type, `skey == community_skey(ref)`, a managed policy whose `managingApp` is the ref's app, and a published policy. `check_policy` treats a `c-` key as managed, as it does `everyone`.
-- **Only its authority writes in it.** A record by anyone else in a community space is ignored. The PDS always lets the authority write, so the app is never asked about writes.
+- **Only its authority writes in it.** A record by anyone else in a community space is ignored. The PDS always lets the authority write without asking the app; it asks about each write or delete notification from any other repo (below).
 - **Creating it:** a writer's client creates its space before its first write there, then calls `registerSpace`.
 
 ### What the app answers
@@ -31,10 +31,19 @@ The PDS asks the app through `com.atproto.managedspace.checkAccess {space, repo?
 1. **Service auth:** `iss` must be the space's authority, `aud` the app's own ref, and `lxm` `checkAccess`. Otherwise nothing.
 2. **Mapping:** the app maps `(space type, key)` to one of its communities by computing `community_skey` for each. An unknown type or key gets nothing.
 3. **The authority** must be a **writer**. Otherwise nothing.
-4. **`repo` names an account: nothing, always.** Nobody but the authority reads or writes a community space directly. Members read through the app, and nobody writes into another's space. So `checkAccess` reveals nobody's membership, and no member ever holds a credential that outlives a removal.
+4. **`repo` names an account: nothing.** Nobody but the authority reads or writes a community space directly. Members read through the app, and nobody writes into another's space. So `checkAccess` reveals nobody's membership, and no member ever holds a credential that outlives a removal.
+   - **4a.** One exception: `repo` = the community's named labeler, with `clientId` absent, gets `{read: false, write: true}`. Any other account, or the labeler with a `clientId`, still gets nothing. The answer for the labeler doesn't depend on which writer's space asks, beyond rule 3.
 5. **`repo` absent** (a sync with no delegation): `read` only when `clientId` is the app's own client ID, and never `write`. The client ID is the URL of the app's OAuth client metadata, which publishes a JWKS; a PDS acting as the managing app needs one too. The PDS verifies the attestation (signature, `aud`, single-use `jti`) before asking, so `clientId` is never a bare claim.
 
 The authority's own reads, writes, `getRecord` and `getBlob` never ask the app, and notification registration rides on the app's own credential request.
+
+**Rule 4a**, the community's labeler:
+- **Writes:** the PDS asks about a labeler's label write with `repo` = the labeler and no `clientId`. Answered write, the labeler enters the writer set, and the app syncs its label, the writer's own client too. `checkAccess` carries no collection, so the labeler may write any collection, but readers count only its `com.atproto.label.record`s ([Private labelers](labelers.md#whose-labels-count)).
+- **Reads:** the labeler's own credential request is asked about the same way and refused, because the answer has `read: false`. It reads posts through the app, as before.
+- **The 0.8.0 rules hold:** the app is still the only reader; members still write only into their own space; Umbrae records count only from the authority.
+- **What it reveals:** to the writer's PDS, that this DID is the community's labeler, which `getCommunity` already shows to members; to the writer, the labeler in `listWriters` and every unrestricted label on their own posts there.
+- **`removeWriter`:** the writer can push the labeler out of the writer set. The app keeps its last-synced labels, the community's `!takedown` included, until it syncs their deletion. The labeler's next write there brings it back.
+- **Who reads these labels:** only the app and the author. A managing app that is a PDS gets them by syncing the spaces it already syncs.
 
 ### Visibility
 
@@ -71,7 +80,7 @@ When a member is removed, demoted to reader, or leaves:
 
 - **Spaces:** one per writer, on the writer's own PDS.
 - **The app:** one credential per writer space, renewed each credential lifetime (10 minutes by default, 1 hour at most), with one notification registration riding on it. Load grows with the number of writers, not readers.
-- **`checkAccess`:** called once per credential the app requests, and never for writes. The app should answer from memory.
+- **`checkAccess`:** called once per credential the app requests, and once for each write or delete notification from a repo other than the space's authority. The app answers from memory.
 
 ## Where records go
 
@@ -233,7 +242,16 @@ Moderators get the profile, its blobs and the audiences it's shown to. They're n
 - **What the app answers for it:** the same service-auth check; the space maps by `(tools.umbrae.labeler, labeler DID)` to the communities that name it; **nothing for an account**, since members get labels through the app, which applies `can_view_label` and `can_view_repost_label`, label audiences included; with `repo` absent, `read` only for the app's own client ID; no `write`, since the labeler is the authority.
 - `check_labeler_policy` accepts this policy. The app also checks that the labeler space's `managingApp` is its own.
 - **The labeler reads community posts through the app**, never by syncing members' spaces.
-- Moderators are named in the app. Takedowns stay with the labeler service.
+- **Its labels in members' spaces:** an unrestricted label on a post or repost in a member's space may live there instead, as a `com.atproto.label.record` the labeler writes under rule 4a. `SpaceState.label_writers` holds the named labeler, never `members`.
+- Moderators are named in the app.
+
+### The community's takedown
+
+A community's own takedown lives in two places:
+1. **At the managing app** (primary): the operator or moderators take content down in the app's admin. It works whatever the writer does.
+2. **In the writer's space:** the named labeler's `!takedown`, which the app honors as the community's (`apply_takedowns`), and keeps applying after a `removeWriter`.
+
+The writer's own `!takedown` in their space works like deleting. Another writer's `!takedown` there is ignored. Moderators and the labeler service also take content down at the app, as before.
 
 ## Known limits
 

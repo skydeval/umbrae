@@ -15,14 +15,18 @@
 //! - a group record is the authority's own, at rkey `self`;
 //! - a bookmark is the authority's own, in the only-me space (key `self`),
 //!   and its subject is a hidden post (in any Umbrae space). Show it only
-//!   while its owner may still see that post.
+//!   while its owner may still see that post;
+//! - an in-space label (`com.atproto.label.record`) is checked by
+//!   [`crate::validate_space_label`].
 
 use crate::community::{feed, list_subscription, Feed, ListSubscription, MAX_FEEDS_PER_POST};
 use crate::list::{exemption, list, listitem, Exemption, List, ListItem};
 use crate::social::{follow, postgate, profile, threadgate, Follow, Postgate, Profile, Threadgate};
+use crate::space_label::{validate_space_label, SpaceLabel};
 use crate::{
     is_community_skey, BOOKMARK, EXEMPTION, FEED, FOLLOW, GROUP, GROUP_RKEY, LIKE, LIST, LISTITEM,
-    LIST_SUBSCRIPTION, POST, POSTGATE, PROFILE, REPOST, SELF_RKEY, SPACE_TYPE, THREADGATE,
+    LIST_SUBSCRIPTION, POST, POSTGATE, PROFILE, REPOST, SELF_RKEY, SPACE_LABEL, SPACE_TYPE,
+    THREADGATE,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -193,6 +197,9 @@ pub enum Record {
     Feed(Box<Feed>),
     /// A list subscription, in only-me.
     ListSubscription(ListSubscription),
+    /// An in-space label (`com.atproto.label.record`). Whose count is the
+    /// reader's rule.
+    SpaceLabel(Box<SpaceLabel>),
 }
 
 const EMBEDS: &[&str] = &[
@@ -229,10 +236,16 @@ pub fn validate_record(uri: &SpaceRecordUri, value: &Map) -> Result<Option<Recor
         POSTGATE,
         FEED,
         LIST_SUBSCRIPTION,
+        SPACE_LABEL,
     ]
     .contains(&collection)
     {
         return Ok(None);
+    }
+    if collection == SPACE_LABEL {
+        return Ok(Some(Record::SpaceLabel(Box::new(validate_space_label(
+            uri, value,
+        )?))));
     }
     match value.get("$type") {
         Some(Value::Text(t)) if t == collection => {}

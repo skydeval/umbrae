@@ -651,6 +651,22 @@ pub(crate) fn run(
         )],
         Some(false),
     )?;
+    // Expected difference: atproto-pds takes the legacy ref; start over.
+    let leg = if v_leg.status == 200 {
+        "accepted"
+    } else {
+        "refused"
+    };
+    if v_leg.status == 200 {
+        space_writes(
+            pds,
+            &alice,
+            &space,
+            vec![sdelete(BSKY_POST, "3mbpaaaaaaa2d")],
+            None,
+        )?
+        .ok("deleting the legacy-ref post")?;
+    }
     let size: i64 = pub_blob
         .header("content-length")
         .and_then(|s| s.parse().ok())
@@ -676,10 +692,10 @@ pub(crate) fn run(
         None,
     )?;
     report.check(
-        "private: the space validates native schemas by default and skips them with validate:false; a legacy blob ref is refused even then, and once rewritten to $type blob with the size from sync.getBlob it's accepted",
+        "private: the space validates native schemas by default and skips them with validate:false; a legacy blob ref is refused even then (an expected difference), and once rewritten to $type blob with the size from sync.getBlob it's accepted",
         if v_def.status != 200
             && v_off.status == 200
-            && v_leg.status != 200
+            && crate::same_answer("refused", leg)
             && v_new.status == 200
             && size == png.len() as i64
             && image["$type"] == "blob"

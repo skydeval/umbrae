@@ -24,6 +24,13 @@
 //! paths, whatever the rules say. They don't pass the rules: no
 //! `checkAccess` write, and they're never shown as followers.
 //!
+//! Takedowns and labels here follow the rules for spaces in general
+//! ([`crate::labeler`]): the owner's `!takedown` on a record in this space
+//! hides it where the serving app's spaces configuration honors it for this
+//! type (on by default; [`crate::labeler::apply_takedowns`]). An in-space
+//! label counts only from an account the app lists in `label_writers` (the
+//! writer set minus the owner), where the reader trusts it as a labeler.
+//!
 //! Going public moves the owner's records back, except those that must
 //! stay: the rules, every record by another account, and any owner's record that
 //! names, even through another, a record that stays ([`stays_private`]).
