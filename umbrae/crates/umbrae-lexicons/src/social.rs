@@ -39,6 +39,7 @@ pub const AUDIENCE_FOLLOWERS: &str = "tools.umbrae.profile#followersAudience";
 pub const AUDIENCE_GROUP: &str = "tools.umbrae.profile#groupAudience";
 pub const AUDIENCE_COMMUNITY: &str = "tools.umbrae.profile#communityAudience";
 pub const AUDIENCE_EVERYONE: &str = "tools.umbrae.profile#everyoneAudience";
+pub const AUDIENCE_PRIVATE: &str = "tools.umbrae.profile#privateAudience";
 
 /// At most this many profile links, as on the public profile.
 pub const MAX_PROFILE_LINKS: usize = 10;
@@ -103,6 +104,9 @@ pub enum Audience {
     Community(CommunityRef),
     /// Anyone the serving app admits.
     Everyone,
+    /// Whoever passes the owner's private-account rules. Only the serving
+    /// app of the owner's private space serves it.
+    Private,
 }
 
 /// One pronoun set: its forms, such as `["she", "her"]`.
@@ -246,6 +250,7 @@ fn audiences(v: Option<&Value>, owner: &str) -> Result<Vec<Audience>, Invalid> {
         let audience = match rule_type(a) {
             Some(AUDIENCE_FOLLOWERS) => Audience::Followers,
             Some(AUDIENCE_EVERYONE) => Audience::Everyone,
+            Some(AUDIENCE_PRIVATE) => Audience::Private,
             Some(AUDIENCE_GROUP) => {
                 let s = space()?;
                 if s.authority() != owner || !is_valid_tid(s.skey()) {

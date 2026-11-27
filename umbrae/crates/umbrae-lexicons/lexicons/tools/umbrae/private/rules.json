@@ -1,0 +1,69 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.rules",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Who may see a private account's records, at self in its private space, written by the owner. Only the owner and the serving app read it. A viewer sees the records if they pass any rule, have no block with the owner either way (blocks, and list blocks either one subscribes to), and are active. The serving app checks on every read, so a change applies to every record at once. Without this record, approvedFollowers alone applies.",
+      "key": "literal:self",
+      "record": {
+        "type": "object",
+        "required": [
+          "allow",
+          "createdAt"
+        ],
+        "properties": {
+          "allow": {
+            "type": "array",
+            "items": {
+              "type": "union",
+              "refs": [
+                "#approvedFollowers",
+                "#following",
+                "#mutuals",
+                "#list"
+              ]
+            },
+            "description": "Any one admits. Empty: the owner alone. Unknown types grant nothing."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    },
+    "approvedFollowers": {
+      "type": "object",
+      "description": "Members of the owner's followers space (a tools.umbrae.space at key followers). Following publicly grants nothing.",
+      "properties": {}
+    },
+    "following": {
+      "type": "object",
+      "description": "Accounts the owner follows publicly (app.bsky.graph.follow).",
+      "properties": {}
+    },
+    "mutuals": {
+      "type": "object",
+      "description": "Accounts that follow each other publicly with the owner.",
+      "properties": {}
+    },
+    "list": {
+      "type": "object",
+      "required": [
+        "list"
+      ],
+      "description": "Members of one of the owner's own public lists. A list that isn't at://{owner}/app.bsky.graph.list/... grants nothing.",
+      "properties": {
+        "list": {
+          "type": "string",
+          "format": "at-uri"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.getRecords",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "Records by URI, for a viewer who passes their owner's rules. Either form names a private account's record: its at:space URI in the private space, or its public at:// alias. A missing record and one the viewer may not see both come back as notFound. Served by the private account's serving app (the servingApp of its declaration), with atproto service auth (iss the viewer, aud the app, lxm this method); clients call through their PDS with atproto-proxy set to the app.",
+      "parameters": {
+        "type": "params",
+        "required": [
+          "uris"
+        ],
+        "properties": {
+          "uris": {
+            "type": "array",
+            "maxLength": 25,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "records"
+          ],
+          "properties": {
+            "records": {
+              "type": "array",
+              "items": {
+                "type": "union",
+                "refs": [
+                  "#record",
+                  "#notFound"
+                ]
+              },
+              "description": "One per URI asked for, in order."
+            }
+          }
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "description": "A record, raw. The viewer's app or client renders it with its native renderers. Where a record refers to a post the viewer can't see, it shows tools.umbrae.community.defs#unavailablePost.",
+      "required": [
+        "uri",
+        "cid",
+        "author",
+        "value"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "description": "Where the record lives now: its at:space URI, or its at:// URI for a public one."
+        },
+        "cid": {
+          "type": "string",
+          "format": "cid"
+        },
+        "author": {
+          "type": "string",
+          "format": "did"
+        },
+        "value": {
+          "type": "unknown"
+        }
+      }
+    },
+    "notFound": {
+      "type": "object",
+      "description": "Missing, or not allowed: the two look the same.",
+      "required": [
+        "uri"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

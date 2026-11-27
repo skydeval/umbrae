@@ -1,0 +1,32 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.register",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Tell the serving app that the caller is a private account here. The owner's client first creates the private space, with a published managed policy naming this app, writes the rules and grants the app read access to its followers space. The app then syncs the private space with its own attestation, registering for update notifications, and syncs the followers space. The owner only. Served by the serving app, with atproto service auth (iss the caller, aud the app, lxm this method); clients call through their PDS with atproto-proxy set to the app.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {}
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {}
+        }
+      },
+      "errors": [
+        {
+          "name": "SpaceNotFound",
+          "description": "The caller's private space doesn't exist, or fails the policy check: a published managed policy naming this app."
+        }
+      ]
+    }
+  }
+}

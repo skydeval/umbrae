@@ -1,0 +1,26 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.unregister",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Tell the serving app to stop serving the caller's private account. The app discards everything it holds for the account and stops answering for its private space. Called at the old app after changing serving app. The owner only. Served and authenticated as tools.umbrae.private.register.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {}
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {}
+        }
+      }
+    }
+  }
+}

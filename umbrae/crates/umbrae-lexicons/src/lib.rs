@@ -1,4 +1,5 @@
-//! Lexicons for Umbrae (hidden posts and private labelers), and the checks
+//! Lexicons for Umbrae (hidden posts, private labelers and private
+//! accounts), and the checks
 //! a reader applies to records it syncs from a space.
 //!
 //! | NSID | What |
@@ -25,6 +26,9 @@
 //! | `tools.umbrae.labelerPolicies` | label values and definitions, report scope |
 //! | `tools.umbrae.labelerReasons` | report reasons, localized |
 //! | `tools.umbrae.labelerAudience` | a permitted list for restricted labels |
+//! | `tools.umbrae.private` | the space type: one private account's posts, reposts, likes and gates |
+//! | `tools.umbrae.private.rules` | who may see a private account's records |
+//! | `tools.umbrae.private.declaration` | in the public repo: the account is private, and its serving app |
 //!
 //! Validation works on decoded DRISL maps, as they come out of a space
 //! repo (STAR archive, `listRepoOps` or `getRecord`). Unknown fields are
@@ -35,6 +39,7 @@ mod community;
 mod labeler;
 mod list;
 mod migrate;
+mod private;
 mod social;
 mod validate;
 
@@ -53,11 +58,12 @@ pub use list::{
     validate_list_record, Exemption, ExemptionKind, List, ListItem, ListRecord, ListRef, Purpose,
     EXEMPTION_LABEL, EXEMPTION_LABELER, EXEMPTION_LIST,
 };
+pub use private::{validate_private_record, PrivatePost, PrivateRecord, Rule, Rules};
 pub use social::{
     Audience, Follow, Postgate, Profile, ProfileLink, PronounSet, ReplyRule, Threadgate,
-    AUDIENCE_COMMUNITY, AUDIENCE_EVERYONE, AUDIENCE_FOLLOWERS, AUDIENCE_GROUP, MAX_LINK_TITLE,
-    MAX_PROFILE_AUDIENCES, MAX_PROFILE_LINKS, MAX_PRONOUN_FORMS, MAX_PRONOUN_SETS, RULE_DISABLE,
-    RULE_FOLLOWER, RULE_FOLLOWING, RULE_LIST, RULE_MENTION,
+    AUDIENCE_COMMUNITY, AUDIENCE_EVERYONE, AUDIENCE_FOLLOWERS, AUDIENCE_GROUP, AUDIENCE_PRIVATE,
+    MAX_LINK_TITLE, MAX_PROFILE_AUDIENCES, MAX_PROFILE_LINKS, MAX_PRONOUN_FORMS, MAX_PRONOUN_SETS,
+    RULE_DISABLE, RULE_FOLLOWER, RULE_FOLLOWING, RULE_LIST, RULE_MENTION,
 };
 pub use validate::{
     validate_record, Bookmark, Group, Invalid, Like, Post, PublicUri, Record, Reply, Repost,
@@ -119,6 +125,47 @@ pub const LABELER_PROFILE: &str = "tools.umbrae.labelerProfile";
 pub const LABELER_POLICIES: &str = "tools.umbrae.labelerPolicies";
 pub const LABELER_REASONS: &str = "tools.umbrae.labelerReasons";
 pub const LABELER_AUDIENCE: &str = "tools.umbrae.labelerAudience";
+
+/// The space type of a private account: one per account, at key `self`.
+pub const PRIVATE_SPACE_TYPE: &str = "tools.umbrae.private";
+pub const PRIVATE_RULES: &str = "tools.umbrae.private.rules";
+pub const PRIVATE_DECLARATION: &str = "tools.umbrae.private.declaration";
+/// Private-account methods, served by the account's serving app.
+pub const PRIVATE_REGISTER: &str = "tools.umbrae.private.register";
+pub const PRIVATE_UNREGISTER: &str = "tools.umbrae.private.unregister";
+pub const PRIVATE_REQUEST_FOLLOW: &str = "tools.umbrae.private.requestFollow";
+pub const PRIVATE_WITHDRAW_REQUEST: &str = "tools.umbrae.private.withdrawRequest";
+pub const PRIVATE_LIST_REQUESTS: &str = "tools.umbrae.private.listRequests";
+pub const PRIVATE_GET_ACCESS: &str = "tools.umbrae.private.getAccess";
+pub const PRIVATE_LIST_RECORDS: &str = "tools.umbrae.private.listRecords";
+pub const PRIVATE_GET_RECORDS: &str = "tools.umbrae.private.getRecords";
+pub const PRIVATE_LIST_INTERACTIONS: &str = "tools.umbrae.private.listInteractions";
+pub const PRIVATE_GET_BLOB: &str = "tools.umbrae.private.getBlob";
+/// The native move, served by a PDS for the authenticated account.
+pub const PRIVATE_MOVE: &str = "tools.umbrae.private.move";
+/// The rule types of `tools.umbrae.private.rules`.
+pub const PRIVATE_RULE_APPROVED_FOLLOWERS: &str = "tools.umbrae.private.rules#approvedFollowers";
+pub const PRIVATE_RULE_FOLLOWING: &str = "tools.umbrae.private.rules#following";
+pub const PRIVATE_RULE_MUTUALS: &str = "tools.umbrae.private.rules#mutuals";
+pub const PRIVATE_RULE_LIST: &str = "tools.umbrae.private.rules#list";
+
+/// The native collections a private space holds.
+pub const BSKY_POST: &str = "app.bsky.feed.post";
+pub const BSKY_REPOST: &str = "app.bsky.feed.repost";
+pub const BSKY_LIKE: &str = "app.bsky.feed.like";
+pub const BSKY_THREADGATE: &str = "app.bsky.feed.threadgate";
+pub const BSKY_POSTGATE: &str = "app.bsky.feed.postgate";
+/// A public list, as a `#list` rule names it.
+pub const BSKY_LIST: &str = "app.bsky.graph.list";
+/// Every collection of a private space.
+pub const PRIVATE_COLLECTIONS: [&str; 6] = [
+    BSKY_POST,
+    BSKY_REPOST,
+    BSKY_LIKE,
+    BSKY_THREADGATE,
+    BSKY_POSTGATE,
+    PRIVATE_RULES,
+];
 
 /// Every Umbrae lexicon document, by NSID.
 pub const LEXICONS: &[(&str, &str)] = &[
@@ -238,6 +285,62 @@ pub const LEXICONS: &[(&str, &str)] = &[
         ACTOR_GET_PROFILE_BLOB,
         include_str!("../lexicons/tools/umbrae/actor/getProfileBlob.json"),
     ),
+    (
+        PRIVATE_SPACE_TYPE,
+        include_str!("../lexicons/tools/umbrae/private.json"),
+    ),
+    (
+        PRIVATE_RULES,
+        include_str!("../lexicons/tools/umbrae/private/rules.json"),
+    ),
+    (
+        PRIVATE_DECLARATION,
+        include_str!("../lexicons/tools/umbrae/private/declaration.json"),
+    ),
+    (
+        PRIVATE_REGISTER,
+        include_str!("../lexicons/tools/umbrae/private/register.json"),
+    ),
+    (
+        PRIVATE_UNREGISTER,
+        include_str!("../lexicons/tools/umbrae/private/unregister.json"),
+    ),
+    (
+        PRIVATE_MOVE,
+        include_str!("../lexicons/tools/umbrae/private/move.json"),
+    ),
+    (
+        PRIVATE_REQUEST_FOLLOW,
+        include_str!("../lexicons/tools/umbrae/private/requestFollow.json"),
+    ),
+    (
+        PRIVATE_WITHDRAW_REQUEST,
+        include_str!("../lexicons/tools/umbrae/private/withdrawRequest.json"),
+    ),
+    (
+        PRIVATE_LIST_REQUESTS,
+        include_str!("../lexicons/tools/umbrae/private/listRequests.json"),
+    ),
+    (
+        PRIVATE_GET_ACCESS,
+        include_str!("../lexicons/tools/umbrae/private/getAccess.json"),
+    ),
+    (
+        PRIVATE_LIST_RECORDS,
+        include_str!("../lexicons/tools/umbrae/private/listRecords.json"),
+    ),
+    (
+        PRIVATE_GET_RECORDS,
+        include_str!("../lexicons/tools/umbrae/private/getRecords.json"),
+    ),
+    (
+        PRIVATE_LIST_INTERACTIONS,
+        include_str!("../lexicons/tools/umbrae/private/listInteractions.json"),
+    ),
+    (
+        PRIVATE_GET_BLOB,
+        include_str!("../lexicons/tools/umbrae/private/getBlob.json"),
+    ),
 ];
 
 /// A lexicon document by NSID.
@@ -327,5 +430,63 @@ mod tests {
                 LABELER_AUDIENCE
             ]
         );
+    }
+
+    #[test]
+    fn private_space_type_declares_its_collections() {
+        let v: Value = serde_json::from_str(get(PRIVATE_SPACE_TYPE).unwrap()).unwrap();
+        let main = &v["defs"]["main"];
+        assert_eq!(main["type"], "space");
+        assert_eq!(main["key"], "literal:self");
+        let cols: Vec<_> = main["collections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        assert_eq!(cols, PRIVATE_COLLECTIONS);
+        // The rule types and the private audience are defined where their
+        // NSIDs say.
+        let rules: Value = serde_json::from_str(get(PRIVATE_RULES).unwrap()).unwrap();
+        for ty in [
+            PRIVATE_RULE_APPROVED_FOLLOWERS,
+            PRIVATE_RULE_FOLLOWING,
+            PRIVATE_RULE_MUTUALS,
+            PRIVATE_RULE_LIST,
+        ] {
+            let (doc, name) = ty.split_once('#').unwrap();
+            assert_eq!(doc, PRIVATE_RULES);
+            assert!(rules["defs"][name].is_object(), "{ty}");
+            assert!(
+                rules["defs"]["main"]["record"]["properties"]["allow"]["items"]["refs"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&Value::from(format!("#{name}")))
+            );
+        }
+        let profile: Value = serde_json::from_str(get(PROFILE).unwrap()).unwrap();
+        let (_, name) = AUDIENCE_PRIVATE.split_once('#').unwrap();
+        assert!(profile["defs"][name].is_object());
+        // Every record and method is listed, and the shared record def that
+        // listRecords and listInteractions refer to exists.
+        for nsid in [
+            PRIVATE_DECLARATION,
+            PRIVATE_REGISTER,
+            PRIVATE_UNREGISTER,
+            PRIVATE_MOVE,
+            PRIVATE_REQUEST_FOLLOW,
+            PRIVATE_WITHDRAW_REQUEST,
+            PRIVATE_LIST_REQUESTS,
+            PRIVATE_GET_ACCESS,
+            PRIVATE_LIST_RECORDS,
+            PRIVATE_GET_RECORDS,
+            PRIVATE_LIST_INTERACTIONS,
+            PRIVATE_GET_BLOB,
+        ] {
+            assert!(get(nsid).is_some(), "{nsid}");
+        }
+        let records: Value = serde_json::from_str(get(PRIVATE_GET_RECORDS).unwrap()).unwrap();
+        assert!(records["defs"]["record"].is_object());
+        assert!(records["defs"]["notFound"].is_object());
     }
 }

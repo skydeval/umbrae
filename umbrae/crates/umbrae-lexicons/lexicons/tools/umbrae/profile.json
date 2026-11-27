@@ -108,7 +108,8 @@
                 "#followersAudience",
                 "#groupAudience",
                 "#communityAudience",
-                "#everyoneAudience"
+                "#everyoneAudience",
+                "#privateAudience"
               ]
             },
             "description": "Who may see the profile. Required in the profile space and forbidden elsewhere. Empty: the owner alone. Unknown types grant nothing."
@@ -199,6 +200,11 @@
     "everyoneAudience": {
       "type": "object",
       "description": "Anyone the serving app admits.",
+      "properties": {}
+    },
+    "privateAudience": {
+      "type": "object",
+      "description": "Whoever passes the owner's private-account rules (tools.umbrae.private.rules). Served only by the serving app of the owner's private space.",
       "properties": {}
     }
   }

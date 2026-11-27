@@ -12,10 +12,16 @@
 //!   reply, like, repost or quote of a post in a community space goes into
 //!   the actor's own space for the same community (same type and key). A
 //!   reply that also quotes goes there too.
+//! - **A private account's records:** a reply, like, repost or quote of a
+//!   record in a private space goes into that space, in the actor's own
+//!   repo, whoever the actor is. Anything else a private account writes
+//!   goes into its own private space: its posts, and its interactions on
+//!   public subjects ([`private_actor_space`]). A record named by its
+//!   public alias is mapped first with [`crate::space::private_uri`].
 //! - A public record never points at a hidden one: a space URI has no
 //!   public meaning, and naming one in public leaks that it exists.
 
-use crate::space::is_community_space;
+use crate::space::{is_community_space, private_space};
 use umbrae_core::drisl::Value;
 use umbrae_core::uri::{contains_space_uri, SpaceRecordUri, SpaceRef, UriError};
 use umbrae_lexicons::Target;
@@ -55,6 +61,19 @@ pub fn quote_space(actor: &str, quoted: &Target) -> Result<Option<SpaceRef>, Uri
         .hidden()
         .map(|u| acting_space(actor, u.space()))
         .transpose()
+}
+
+/// The space a private account's write goes into. `subject` is what it acts
+/// on: a reply's parent, a like's or repost's subject, a quoted record, or
+/// `None` for a new post. An interaction on a hidden record goes where the
+/// functions above put it (for a record in a private space, that space);
+/// anything else goes into `actor`'s own private space. For a reply that
+/// also quotes, both must give the same space, or the client refuses it.
+pub fn private_actor_space(actor: &str, subject: Option<&Target>) -> Result<SpaceRef, UriError> {
+    match subject.and_then(Target::hidden) {
+        Some(u) => acting_space(actor, u.space()),
+        None => private_space(actor),
+    }
 }
 
 /// Whether a record headed for a **public** repo names a hidden record
@@ -139,6 +158,44 @@ mod tests {
         // The author acting on their own post stays in their own space.
         assert_eq!(&like_space(ALICE, &post).unwrap(), post.space());
         assert!(like_space("not a did", &post).is_err());
+    }
+
+    #[test]
+    fn private_accounts_records() {
+        use crate::space::private_uri;
+        use umbrae_lexicons::{PublicUri, BSKY_POST};
+        const CAROL: &str = "did:plc:carolcccccccccccccccccccc";
+        let alices = private_space(ALICE).unwrap();
+        let p1 = alices.record(ALICE, BSKY_POST, "3mbaaaaaaaaa2").unwrap();
+        // Anyone acting on Alice's private record writes into her space: a
+        // public account, or a private one (Carol).
+        for actor in [BOB, CAROL] {
+            let t = Target::Hidden(p1.clone());
+            assert_eq!(reply_space(actor, &t), Ok(Some(alices.clone())));
+            assert_eq!(quote_space(actor, &t), Ok(Some(alices.clone())));
+            assert_eq!(like_space(actor, &p1), Ok(alices.clone()));
+            assert_eq!(repost_space(actor, &p1), Ok(alices.clone()));
+            assert_eq!(private_actor_space(actor, Some(&t)), Ok(alices.clone()));
+        }
+        // Named by its public alias, mapped first.
+        let alias = PublicUri::parse(&format!("at://{ALICE}/{BSKY_POST}/3mbaaaaaaaaa2")).unwrap();
+        assert_eq!(private_uri(&alias), Ok(p1.clone()));
+        // A private actor's own posts, and its interactions on public
+        // subjects, go into its own private space.
+        let carols = private_space(CAROL).unwrap();
+        let public = Target::parse(&format!("at://{BOB}/{BSKY_POST}/3mbaaaaaaaaa5")).unwrap();
+        assert_eq!(
+            private_actor_space(CAROL, Some(&public)),
+            Ok(carols.clone())
+        );
+        assert_eq!(private_actor_space(CAROL, None), Ok(carols));
+        // On a group's hidden post, the group's space as ever.
+        let h = hidden();
+        assert_eq!(
+            private_actor_space(CAROL, Some(&Target::Hidden(h.clone()))).as_ref(),
+            Ok(h.space())
+        );
+        assert!(private_actor_space("not a did", None).is_err());
     }
 
     #[test]

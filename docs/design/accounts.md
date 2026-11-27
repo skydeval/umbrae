@@ -1,6 +1,6 @@
-# Private accounts, profiles, follows and gates
+# Followers, profiles, follows and gates
 
-## Private accounts
+## Approved followers
 
 A private account's **approved followers** are a `tools.umbrae.space` space with the key **`followers`**. It works exactly like a group:
 - the group policy (`followers_space`, `check_policy`);
@@ -9,6 +9,8 @@ A private account's **approved followers** are a `tools.umbrae.space` space with
 - every post, reply, like, repost and quote rule applies unchanged.
 
 Follow requests are the app's business and never public. Approving a request is `putMembers`, and removing a follower is `removeMembers`.
+
+A **private account** moves its posts, reposts and likes into a private space that only its serving app reads, and shows them to whoever passes its rules. Approved followers are one rule. See [Private accounts](private-accounts.md).
 
 ## Hidden profile
 

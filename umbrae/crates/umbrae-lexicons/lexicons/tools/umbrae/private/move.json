@@ -1,0 +1,51 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.move",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Move the authenticated account's records into its private space, or back to its public repo, server-side, by the same rules as a client's batched move and without its rate limits. Optional: a PDS may serve it. Clients try it first and fall back to batches on MethodNotImplemented. Called on the account's own PDS with its session.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "direction"
+          ],
+          "properties": {
+            "direction": {
+              "type": "string",
+              "knownValues": [
+                "private",
+                "public"
+              ]
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "refused": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "at-uri"
+              },
+              "description": "Records the move left where they were because the other side refused them. The owner may delete them."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "SpaceNotFound",
+          "description": "The account has no private space."
+        }
+      ]
+    }
+  }
+}

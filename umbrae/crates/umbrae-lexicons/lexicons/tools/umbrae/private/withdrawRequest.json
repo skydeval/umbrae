@@ -1,0 +1,40 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.withdrawRequest",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Withdraw the caller's follow request to a private account. Served and authenticated as tools.umbrae.private.requestFollow.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "actor"
+          ],
+          "properties": {
+            "actor": {
+              "type": "string",
+              "format": "did",
+              "description": "The private account."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {}
+        }
+      },
+      "errors": [
+        {
+          "name": "AccountNotFound",
+          "description": "Not a private account this app serves."
+        }
+      ]
+    }
+  }
+}

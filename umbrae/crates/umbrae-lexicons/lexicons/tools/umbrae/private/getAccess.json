@@ -1,0 +1,50 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.getAccess",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "The caller's own standing with a private account. Served and authenticated as tools.umbrae.private.requestFollow.",
+      "parameters": {
+        "type": "params",
+        "required": [
+          "actor"
+        ],
+        "properties": {
+          "actor": {
+            "type": "string",
+            "format": "did",
+            "description": "The private account."
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "state"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "knownValues": [
+                "owner",
+                "allowed",
+                "requested",
+                "none"
+              ],
+              "description": "owner: the caller is the account. allowed: the caller passes its rules now. requested: a follow request is waiting. none: anything else."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "AccountNotFound",
+          "description": "Not a private account this app serves."
+        }
+      ]
+    }
+  }
+}

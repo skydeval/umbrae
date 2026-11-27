@@ -9,7 +9,10 @@
 //! - **a community:** its members, readers and writers, while the owner is
 //!   still one. Only the community's own app serves this audience: it alone
 //!   knows the membership ([`AudienceSource::community_member`]);
-//! - **everyone:** anyone the serving app admits.
+//! - **everyone:** anyone the serving app admits;
+//! - **private:** whoever passes the owner's private-account rules. Only the
+//!   serving app of the owner's private space serves this audience
+//!   ([`AudienceSource::private_viewer`]).
 //!
 //! Every audience sees the same record, so an edit reaches all of them at
 //! once. The audience list is for the owner and moderation only: a serving
@@ -55,6 +58,14 @@ pub trait AudienceSource {
     fn community_member(&self, community: &CommunityRef, did: &str) -> Option<Role> {
         let _ = (community, did);
         None
+    }
+    /// Whether `viewer` passes `owner`'s private-account rules
+    /// ([`crate::private::can_view_private`]). Only the serving app of the
+    /// owner's private space answers; any other app answers false, so there
+    /// a private audience grants nothing.
+    fn private_viewer(&self, owner: &str, viewer: &str) -> bool {
+        let _ = (owner, viewer);
+        false
     }
 }
 
@@ -118,6 +129,7 @@ pub fn can_view_profile(
                 && audiences.community_member(c, owner).is_some()
         }
         Audience::Everyone => audiences.admits(viewer),
+        Audience::Private => audiences.private_viewer(owner, viewer),
         _ => false,
     })
 }
@@ -147,7 +159,7 @@ mod tests {
     use umbrae_core::policy::MemberAccess;
     use umbrae_lexicons::{
         validate_record, Record, AUDIENCE_COMMUNITY, AUDIENCE_EVERYONE, AUDIENCE_FOLLOWERS,
-        AUDIENCE_GROUP,
+        AUDIENCE_GROUP, AUDIENCE_PRIVATE,
     };
 
     const ALICE: &str = "did:plc:aliceaaaaaaaaaaaaaaaaaaa";
@@ -450,6 +462,77 @@ mod tests {
             &src,
             &OK
         ));
+    }
+
+    /// The serving app of Alice's private space: these viewers pass her
+    /// rules.
+    struct PrivateApp(Source, Vec<&'static str>);
+    impl AudienceSource for PrivateApp {
+        fn state(&self, space: &SpaceRef) -> Option<&SpaceState> {
+            self.0.state(space)
+        }
+        fn admits(&self, viewer: &str) -> bool {
+            self.0.admits(viewer)
+        }
+        fn private_viewer(&self, owner: &str, viewer: &str) -> bool {
+            owner == ALICE && self.1.contains(&viewer)
+        }
+    }
+
+    #[test]
+    fn the_private_audience() {
+        let home = state(profile_space(ALICE).unwrap(), group_policy(None), &[]);
+        let p = parse(&record(vec![audience(AUDIENCE_PRIVATE, None)]));
+        assert_eq!(p.audiences, Some(vec![Audience::Private]));
+        let source = || Source {
+            states: vec![],
+            admitted: vec![BOB, CAROL],
+            communities: vec![],
+        };
+        let app = PrivateApp(source(), vec![BOB]);
+        assert!(can_view_profile(Some(ALICE), &uri(), &p, &home, &app, &OK));
+        assert!(can_view_profile(Some(BOB), &uri(), &p, &home, &app, &OK));
+        assert!(!can_view_profile(Some(CAROL), &uri(), &p, &home, &app, &OK));
+        let cid = png();
+        assert!(can_view_profile_blob(
+            Some(BOB),
+            &cid,
+            &uri(),
+            &p,
+            &home,
+            &app,
+            &OK
+        ));
+        // Blocks still cut.
+        let blocked = Ctx {
+            blocked: vec![(ALICE, BOB)],
+        };
+        assert!(!can_view_profile(
+            Some(BOB),
+            &uri(),
+            &p,
+            &home,
+            &app,
+            &blocked
+        ));
+        // Any other app: the default answers false, so nobody but the owner.
+        let other = Plain(source());
+        assert!(!other.private_viewer(ALICE, BOB));
+        assert!(!can_view_profile(Some(BOB), &uri(), &p, &home, &other, &OK));
+        assert!(can_view_profile(
+            Some(ALICE),
+            &uri(),
+            &p,
+            &home,
+            &other,
+            &OK
+        ));
+        // A duplicate refuses, as for every audience.
+        let dup = record(vec![
+            audience(AUDIENCE_PRIVATE, None),
+            audience(AUDIENCE_PRIVATE, None),
+        ]);
+        assert!(validate_record(&uri(), &dup).is_err());
     }
 
     #[test]

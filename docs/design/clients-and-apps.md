@@ -13,10 +13,15 @@
 | the user's own community spaces (create one, then post, reply, like, repost, feed and gate there) | `space:tools.umbrae.space?collection=tools.umbrae.post&collection=tools.umbrae.like&collection=tools.umbrae.repost&collection=tools.umbrae.feed&collection=tools.umbrae.threadgate&collection=tools.umbrae.postgate&manage=create` |
 | the user's hidden profile (create the profile space, write the record, add a community app to `allowedApps`) | `space:tools.umbrae.space?skey=profile&collection=tools.umbrae.profile&manage=create&manage=update` |
 | a serving app that fetches the owner's profile delegations itself | `space:tools.umbrae.space?skey=profile&action=read` |
+| a private account's own private space (create it, move records in and out, write the rules, change serving app) | `space:tools.umbrae.private?collection=app.bsky.feed.post&collection=app.bsky.feed.repost&collection=app.bsky.feed.like&collection=app.bsky.feed.threadgate&collection=app.bsky.feed.postgate&collection=tools.umbrae.private.rules&manage=create&manage=update&manage=delete` |
+| replying, liking, reposting and quoting in others' private spaces | `space:tools.umbrae.private?authority=*&collection=app.bsky.feed.post&collection=app.bsky.feed.repost&collection=app.bsky.feed.like&collection=app.bsky.feed.postgate` |
+| a private account's serving app, keeping its own followers-space access | `space:tools.umbrae.space?skey=followers&action=read` |
 
 `manage=create` covers `createSpace`, `manage=update` covers `putMembers`, `removeMembers` and `updateSpace`, and `manage=delete` covers `deleteSpace`.
 
 A community space is only ever read by its author and the community's app, so no client asks for `authority=*` on one: members read communities through the app.
+
+A private space is read only by its owner and its serving app. `authority=*` there is for writing interactions into the owner's space; viewers read through the app's `tools.umbrae.private.*` methods.
 
 ## Reading another account's space
 

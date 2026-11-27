@@ -1,0 +1,54 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.requestFollow",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Ask a private account to approve the caller as a follower. The owner approves by adding the caller to its followers space with putMembers, and refuses by dismissing the request; the app drops a request once it's approved. Served by the account's serving app (the servingApp of its declaration), with atproto service auth (iss the caller, aud the app, lxm this method); clients call through their PDS with atproto-proxy set to the app.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "actor"
+          ],
+          "properties": {
+            "actor": {
+              "type": "string",
+              "format": "did",
+              "description": "The private account."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "state"
+          ],
+          "properties": {
+            "state": {
+              "type": "string",
+              "knownValues": [
+                "requested",
+                "allowed"
+              ]
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "AccountNotFound",
+          "description": "Not a private account this app serves."
+        },
+        {
+          "name": "NotAllowed",
+          "description": "A block between the caller and the account."
+        }
+      ]
+    }
+  }
+}

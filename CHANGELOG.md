@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-27
+
+### Added
+- Private accounts: one switch makes a whole account permissioned, old posts included, with the boundary enforced by spaces. See [Private accounts](docs/design/private-accounts.md).
+  - The private space: `tools.umbrae.private` at `self` (`private_space`, `PRIVATE_SPACE_TYPE`), with a published managed policy naming the owner's serving app, its only reader (`check_private_policy`). It holds native `app.bsky.feed.*` posts, reposts, likes, threadgates and postgates, so a move is an exact copy at the same key, and the owner's `tools.umbrae.private.rules`.
+  - `validate_private_record`, `PrivateRecord` and `PrivatePost`: the owner's records may name public records and records in the space; another account's count only on the owner's thread; a space URI of any other space doesn't count. `umbrae-sync` returns them as `Checked::Private`.
+  - The rules: `Rules` and `Rule` (`#approvedFollowers`, `#following`, `#mutuals`, `#list`), and `can_view_private` over a `PrivateInputs` trait, checked live and failing closed. `interaction_counts` hides others' interactions once their author stops passing.
+  - Two forms of one record's URI: `private_uri` and `public_uri`.
+  - Placement: interactions on a private-space record go into that space, and a private account's own writes into its own (`private_actor_space`).
+  - Going public: `stays_private`, the records that stay, computed to a fixpoint, and `going_public_value`, which rewrites the owner's own references to the public form.
+  - `tools.umbrae.private.declaration`, in the public repo, naming the serving app.
+  - Methods at the serving app: `register`, `unregister`, `requestFollow`, `withdrawRequest`, `listRequests`, `getAccess`, and the read surface `listRecords`, `getRecords`, `listInteractions` and `getBlob`. `tools.umbrae.private.move`, an optional native move a PDS may serve. The `PRIVATE_*` constants, `PRIVATE_COLLECTIONS` and the `BSKY_*` collection names.
+  - The private audience for the hidden profile: `#privateAudience` (`AUDIENCE_PRIVATE`, `Audience::Private`), served only by the private space's serving app through `AudienceSource::private_viewer`, which answers false by default.
+  - OAuth scopes for the owner's private space, for acting in others', and for the serving app's followers-space access.
+  - The serving app's moderators may see private accounts through its moderation paths.
+- Interop coverage on the reference PDS against a stand-in serving app: a post with an image moves in one batch at the same rkey with the same CID; public `getRecord` and `sync.getBlob` refuse it once the last public use moves, and `listBlobs` leaves the blob out; the owner and the app read the post and blob; resuming looks up first and sends only creates and updates; a legacy blob ref is rewritten before the write; allowed and outside accounts' own delegations are refused; an allowed account's reply is tracked and an outsider's isn't, and after a loss of access the app filters it; going public restores the records and blob and keeps the space; with the app down the PDS fails closed; every `checkAccess` carries the owner as `iss`.
+
 ## [0.8.0] - 2026-11-27
 
 ### Changed
@@ -232,7 +249,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/skydeval/umbrae/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/skydeval/umbrae/compare/v0.7.4...v0.8.0
 [0.7.4]: https://github.com/skydeval/umbrae/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/skydeval/umbrae/compare/v0.7.2...v0.7.3

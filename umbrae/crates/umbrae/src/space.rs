@@ -9,6 +9,16 @@
 //! | one author's records for a community | `c-` and 32 base32 characters ([`community_skey`]) | managedspace naming the community's app, policy published |
 //! | everyone with Umbrae | `everyone` | managedspace, policy published |
 //! | the owner's profile | `profile` | memberspace, as a group, with **no** members |
+//! | a private account (type `tools.umbrae.private`) | `self` | managedspace naming the owner's serving app, policy published |
+//!
+//! A private account's space ([`private_space`]) is read only by its
+//! serving app, which answers `checkAccess` as a community's app does, with
+//! one difference: for an account it answers `write` while that account
+//! passes the owner's rules, so the PDS tracks it as a writer. `write`
+//! grants nothing else, and `read` is never true for an account. The app
+//! checks the space with [`check_private_policy`]. A moved record keeps
+//! its collection and key, so [`private_uri`] and [`public_uri`] map one
+//! form of its URI to the other.
 //!
 //! The profile space holds an account's one hidden profile. Only the owner
 //! and the apps it delegates to (its serving app) read it; the serving app
@@ -49,10 +59,10 @@
 
 use umbrae_core::policy::MemberAccess;
 use umbrae_core::policy::{ManagedPolicy, MemberPolicy, Policy};
-use umbrae_core::uri::{is_valid_tid, SpaceRef, UriError};
+use umbrae_core::uri::{is_valid_tid, SpaceRecordUri, SpaceRef, UriError};
 use umbrae_lexicons::{
-    community_skey, is_community_skey, CommunityRef, EVERYONE_SKEY, FOLLOWERS_SKEY,
-    LIST_SPACE_TYPE, PROFILE_SKEY, SPACE_TYPE,
+    community_skey, is_community_skey, CommunityRef, PublicUri, EVERYONE_SKEY, FOLLOWERS_SKEY,
+    LIST_SPACE_TYPE, PRIVATE_SPACE_TYPE, PROFILE_SKEY, SELF_RKEY, SPACE_TYPE,
 };
 
 /// The only-me space's key.
@@ -108,6 +118,54 @@ pub fn check_community_policy(
         Policy::Managed(_) => Err(Misconfigured::Unpublished),
         _ => Err(Misconfigured::WrongPolicy),
     }
+}
+
+/// A private account's space. Create it with [`managed_policy`] naming the
+/// owner's serving app, then call `tools.umbrae.private.register` there.
+pub fn private_space(owner: &str) -> Result<SpaceRef, UriError> {
+    SpaceRef::new(owner, PRIVATE_SPACE_TYPE, SELF_RKEY)
+}
+
+/// Check that `space` is a private account's space served by `app`: type
+/// `tools.umbrae.private`, key `self`, and a published managed policy whose
+/// `managingApp` is `app`. The app checks before it syncs or serves one.
+pub fn check_private_policy(
+    space: &SpaceRef,
+    app: &str,
+    policy: &Policy,
+) -> Result<(), Misconfigured> {
+    if space.space_type() != PRIVATE_SPACE_TYPE {
+        return Err(Misconfigured::NotUmbrae);
+    }
+    if space.skey() != SELF_RKEY {
+        return Err(Misconfigured::WrongPolicy);
+    }
+    match policy {
+        Policy::Managed(p) if p.managing_app != app => Err(Misconfigured::WrongPolicy),
+        Policy::Managed(p) if p.publish_policy => Ok(()),
+        Policy::Managed(_) => Err(Misconfigured::Unpublished),
+        _ => Err(Misconfigured::WrongPolicy),
+    }
+}
+
+/// The private-space form of a record's public URI: `at://{did}/{coll}/{rkey}`
+/// is `at:space/{did}/tools.umbrae.private/self/{did}/{coll}/{rkey}`.
+pub fn private_uri(public: &PublicUri) -> Result<SpaceRecordUri, UriError> {
+    private_space(&public.did)?.record(&public.did, &public.collection, &public.rkey)
+}
+
+/// The public form of the owner's record in its private space, or `None`
+/// for any other record.
+pub fn public_uri(uri: &SpaceRecordUri) -> Option<PublicUri> {
+    let space = uri.space();
+    (space.space_type() == PRIVATE_SPACE_TYPE
+        && space.skey() == SELF_RKEY
+        && uri.author() == space.authority())
+    .then(|| PublicUri {
+        did: uri.author().to_owned(),
+        collection: uri.collection().to_owned(),
+        rkey: uri.rkey().to_owned(),
+    })
 }
 
 /// An account's "everyone with Umbrae" space.
@@ -390,6 +448,82 @@ mod tests {
         // The old fixed key is no community space.
         let old = SpaceRef::new(ALICE, SPACE_TYPE, "community").unwrap();
         assert!(!is_community_space(&old) && !is_managed(&old));
+    }
+
+    #[test]
+    fn private_spaces_and_their_policy() {
+        const APP: &str = "did:web:app.example#umbrae_app";
+        let s = private_space(ALICE).unwrap();
+        assert_eq!(
+            s.to_string(),
+            format!("at:space/{ALICE}/{PRIVATE_SPACE_TYPE}/self")
+        );
+        let p = managed_policy(APP);
+        assert_eq!(check_private_policy(&s, APP, &p), Ok(()));
+        // Another app, unpublished, not managed.
+        assert_eq!(
+            check_private_policy(&s, "did:web:other.example#umbrae_app", &p),
+            Err(Misconfigured::WrongPolicy)
+        );
+        let unpublished = Policy::Managed(ManagedPolicy {
+            managing_app: APP.into(),
+            publish_policy: false,
+        });
+        assert_eq!(
+            check_private_policy(&s, APP, &unpublished),
+            Err(Misconfigured::Unpublished)
+        );
+        for other in [group_policy(None), only_me_policy()] {
+            assert_eq!(
+                check_private_policy(&s, APP, &other),
+                Err(Misconfigured::WrongPolicy)
+            );
+        }
+        // Another key, or another type at self.
+        let elsewhere = SpaceRef::new(ALICE, PRIVATE_SPACE_TYPE, "other").unwrap();
+        assert_eq!(
+            check_private_policy(&elsewhere, APP, &p),
+            Err(Misconfigured::WrongPolicy)
+        );
+        assert_eq!(
+            check_private_policy(&only_me_space(ALICE).unwrap(), APP, &p),
+            Err(Misconfigured::NotUmbrae)
+        );
+        // And it's never an Umbrae group.
+        assert_eq!(check_policy(&s, &p), Err(Misconfigured::NotUmbrae));
+    }
+
+    #[test]
+    fn private_and_public_uris_round_trip() {
+        let public = PublicUri::parse(&format!("at://{ALICE}/app.bsky.feed.post/{SKEY}")).unwrap();
+        let private = private_uri(&public).unwrap();
+        assert_eq!(
+            private.to_string(),
+            format!("at:space/{ALICE}/{PRIVATE_SPACE_TYPE}/self/{ALICE}/app.bsky.feed.post/{SKEY}")
+        );
+        assert_eq!(public_uri(&private), Some(public.clone()));
+        assert_eq!(
+            public_uri(&private).unwrap().to_string(),
+            public.to_string()
+        );
+        // Another account's record in the space has no public form; nor a
+        // record in any other space.
+        const BOB: &str = "did:plc:bobbbbbbbbbbbbbbbbbbbbbb";
+        let bobs = private_space(ALICE)
+            .unwrap()
+            .record(BOB, "app.bsky.feed.post", SKEY)
+            .unwrap();
+        assert_eq!(public_uri(&bobs), None);
+        let in_only_me = only_me_space(ALICE)
+            .unwrap()
+            .record(ALICE, "app.bsky.feed.post", SKEY)
+            .unwrap();
+        assert_eq!(public_uri(&in_only_me), None);
+        let at_other_key = SpaceRef::new(ALICE, PRIVATE_SPACE_TYPE, "other")
+            .unwrap()
+            .record(ALICE, "app.bsky.feed.post", SKEY)
+            .unwrap();
+        assert_eq!(public_uri(&at_other_key), None);
     }
 
     #[test]

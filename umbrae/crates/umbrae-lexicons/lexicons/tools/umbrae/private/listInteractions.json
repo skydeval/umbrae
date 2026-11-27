@@ -1,0 +1,57 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.listInteractions",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "Replies, likes, reposts and quotes of one of a private account's records, for a viewer who passes its rules: those inside its private space, by actors who still pass the rules, and public ones. Nothing for anyone else. Served and authenticated as tools.umbrae.private.getRecords.",
+      "parameters": {
+        "type": "params",
+        "required": [
+          "subject"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "The record, in either form: its at:space URI or its public at:// alias."
+          },
+          "collection": {
+            "type": "string",
+            "format": "nsid",
+            "description": "Only interactions in this collection."
+          },
+          "cursor": {
+            "type": "string"
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "records"
+          ],
+          "properties": {
+            "records": {
+              "type": "array",
+              "items": {
+                "type": "ref",
+                "ref": "tools.umbrae.private.getRecords#record"
+              }
+            },
+            "cursor": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "RecordNotFound",
+          "description": "Missing, or not allowed: the two look the same."
+        }
+      ]
+    }
+  }
+}

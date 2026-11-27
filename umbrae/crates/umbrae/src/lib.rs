@@ -16,6 +16,8 @@
 //! - [`profile`]: the one hidden profile and the audiences it lists.
 //! - [`labeler`]: private labelers: the space, its policy and readers,
 //!   label signatures, and which labels are in effect.
+//! - [`private`]: private accounts: who passes the owner's rules, which
+//!   interactions count, and what stays inside when going public.
 //!
 //! Record validation lives in `umbrae-lexicons`; protocol primitives in
 //! `umbrae-core`.
@@ -24,8 +26,9 @@ pub mod access;
 pub mod community;
 pub mod labeler;
 pub mod placement;
+pub mod private;
 pub mod profile;
 pub mod space;
 
 pub use access::{Members, SpaceState, Tri, ViewContext};
-pub use umbrae_lexicons::{LABELER_SPACE_TYPE, SPACE_TYPE};
+pub use umbrae_lexicons::{LABELER_SPACE_TYPE, PRIVATE_SPACE_TYPE, SPACE_TYPE};

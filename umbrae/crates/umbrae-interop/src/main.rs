@@ -12,7 +12,8 @@
 //! `labeler_flow` the private-labeler flow, `sync_flow` the
 //! `umbrae-sync` crate end to end, notifications included, and
 //! `community_flow` a community's per-author spaces against a stand-in
-//! managing app.
+//! managing app, and `private_flow` a private account against a stand-in
+//! serving app.
 //!
 //! Run by `scripts/interop.sh` on the build machine; never against a public
 //! service.
@@ -22,6 +23,7 @@ mod labeler_flow;
 mod lexjson;
 mod plc;
 mod prism_mode;
+mod private_flow;
 mod sync_flow;
 mod umbrae_flow;
 
@@ -782,7 +784,8 @@ fn run(pds: &Pds, dir: &plc::Directory, report: &mut Report) -> Result<(), Strin
     umbrae_flow::profile(pds, dir, report, &alice, &bob, &carol)?;
     labeler_flow::run(pds, dir, report, &carol)?;
     sync_flow::run(pds, dir, report, &alice, &bob)?;
-    community_flow::run(pds, dir, report)
+    community_flow::run(pds, dir, report)?;
+    private_flow::run(pds, dir, report)
 }
 
 fn expect_refusal(r: &Resp, name: Option<&str>) -> Result<String, String> {

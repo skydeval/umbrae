@@ -1,0 +1,37 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.getBlob",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "A blob of a private account, for a viewer who may see a record that refers to it. The viewer checks the bytes against the CID. Served and authenticated as tools.umbrae.private.getRecords.",
+      "parameters": {
+        "type": "params",
+        "required": [
+          "actor",
+          "cid"
+        ],
+        "properties": {
+          "actor": {
+            "type": "string",
+            "format": "did",
+            "description": "The account holding the blob."
+          },
+          "cid": {
+            "type": "string",
+            "format": "cid"
+          }
+        }
+      },
+      "output": {
+        "encoding": "*/*"
+      },
+      "errors": [
+        {
+          "name": "BlobNotFound",
+          "description": "No record the viewer may see refers to it, or the app can't fetch it."
+        }
+      ]
+    }
+  }
+}

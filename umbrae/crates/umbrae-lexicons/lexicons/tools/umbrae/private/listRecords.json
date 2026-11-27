@@ -1,0 +1,59 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.listRecords",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "A private account's own records in one collection, newest first, for a viewer who passes its rules. Nothing for anyone else. Served and authenticated as tools.umbrae.private.getRecords.",
+      "parameters": {
+        "type": "params",
+        "required": [
+          "actor",
+          "collection"
+        ],
+        "properties": {
+          "actor": {
+            "type": "string",
+            "format": "did",
+            "description": "The private account."
+          },
+          "collection": {
+            "type": "string",
+            "format": "nsid",
+            "description": "One of the private space's collections."
+          },
+          "cursor": {
+            "type": "string"
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "records"
+          ],
+          "properties": {
+            "records": {
+              "type": "array",
+              "items": {
+                "type": "ref",
+                "ref": "tools.umbrae.private.getRecords#record"
+              }
+            },
+            "cursor": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "AccountNotFound",
+          "description": "Not a private account this app serves."
+        }
+      ]
+    }
+  }
+}

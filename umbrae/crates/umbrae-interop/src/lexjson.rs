@@ -53,6 +53,21 @@ pub fn to_drisl(v: &Value) -> Result<D, String> {
     })
 }
 
+/// Convert DRISL to lexicon JSON, the reverse of [`to_drisl`].
+pub fn to_json(v: &D) -> Value {
+    match v {
+        D::Null => Value::Null,
+        D::Bool(b) => Value::Bool(*b),
+        D::Integer(i) => Value::from(*i),
+        D::Float(f) => Value::from(*f),
+        D::Bytes(b) => serde_json::json!({ "$bytes": B64.encode(b) }),
+        D::Text(s) => Value::String(s.clone()),
+        D::Array(a) => Value::Array(a.iter().map(to_json).collect()),
+        D::Map(m) => Value::Object(m.iter().map(|(k, v)| (k.clone(), to_json(v))).collect()),
+        D::Link(c) => serde_json::json!({ "$link": c.to_string() }),
+    }
+}
+
 /// A `com.atproto.space.defs#commit` from its JSON form.
 pub fn commit(v: &Value) -> Result<Commit, String> {
     let space = v["space"].as_str().ok_or("commit has no space")?;

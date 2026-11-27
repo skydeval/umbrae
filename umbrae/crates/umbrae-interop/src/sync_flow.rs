@@ -130,7 +130,15 @@ fn serve_notifications(inbox: Arc<Mutex<Inbox>>) {
                 .find(|h| h.field.equiv("Authorization"))
                 .map(|h| h.value.as_str().to_owned());
             let managed =
-                crate::community_flow::handle(req.url(), &path, &body, authorization.as_deref());
+                crate::community_flow::handle(req.url(), &path, &body, authorization.as_deref())
+                    .or_else(|| {
+                        crate::private_flow::handle(
+                            req.url(),
+                            &path,
+                            &body,
+                            authorization.as_deref(),
+                        )
+                    });
             let mut ib = inbox.lock().unwrap();
             let expected = ib.token.clone().unwrap_or_default();
             let (status, reply) = if let Some(answer) = managed {

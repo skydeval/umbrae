@@ -1,0 +1,20 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private",
+  "defs": {
+    "main": {
+      "type": "space",
+      "description": "A private account: its posts, reposts and likes, each post's threadgate and postgate, and the rules for who may see them. One per account: the owner's DID is the authority and the key is self. The policy is a published managed policy naming the owner's serving app, which is the space's only reader and shows the records to viewers who pass the rules. Replies, likes, reposts and quotes by others on the owner's records go here too, in their own repos. The records are native app.bsky.feed.* records, so a move is an exact copy.",
+      "key": "literal:self",
+      "title": "Umbrae private account",
+      "collections": [
+        "app.bsky.feed.post",
+        "app.bsky.feed.repost",
+        "app.bsky.feed.like",
+        "app.bsky.feed.threadgate",
+        "app.bsky.feed.postgate",
+        "tools.umbrae.private.rules"
+      ]
+    }
+  }
+}

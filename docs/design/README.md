@@ -8,7 +8,8 @@ How Umbrae uses [atproto spaces](https://github.com/bluesky-social/proposals/tre
 | [Hidden posts](hidden-posts.md) | groups and only-me, posts, replies, likes, reposts, quotes, bookmarks; where each goes and who sees it |
 | [Private labelers](labelers.md) | hidden labels, labels on hidden posts, restricted labels, label keys |
 | [Lists and exemptions](lists.md) | personal and shared hidden lists, and exemptions |
-| [Private accounts, profiles, follows and gates](accounts.md) | the followers audience, the hidden profile, hidden follows, reply and quote gates |
+| [Private accounts](private-accounts.md) | the private space, the rules, moving in and out, the serving app, the public face |
+| [Followers, profiles, follows and gates](accounts.md) | the followers audience, the hidden profile, hidden follows, reply and quote gates |
 | [Communities, feeds and audiences](communities.md) | communities kept by a managing app, each writer's own space, placeholders, feeds, one profile for many audiences, shareable lists and subscriptions |
 | [Clients and apps](clients-and-apps.md) | OAuth scopes, reading and syncing spaces, lexicon resolution, versioning |
 
