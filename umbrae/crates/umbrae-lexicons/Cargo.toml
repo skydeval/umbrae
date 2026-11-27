@@ -8,6 +8,7 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+sha2 = "0.10"
 umbrae-core = { path = "../umbrae-core" }
 unicode-segmentation = "1.12"
 

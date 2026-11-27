@@ -6,7 +6,7 @@
 //! | a private account's approved followers | `followers` | memberspace, as a group |
 //! | only me | `self` | personalspace |
 //! | a shared list | a TID | memberspace, not public, policy published, members **not** published |
-//! | a community | `community` | managedspace, policy published; the authority is the community's own account |
+//! | one author's records for a community | `c-` and 32 base32 characters ([`community_skey`]) | managedspace naming the community's app, policy published |
 //! | everyone with Umbrae | `everyone` | managedspace, policy published |
 //! | the owner's profile | `profile` | memberspace, as a group, with **no** members |
 //!
@@ -23,6 +23,21 @@
 //! Umbrae doesn't care which. Nothing is published as member records; a
 //! reader learns who may see what from the managing app.
 //!
+//! A community has no space of its own. Each writer keeps a community space
+//! ([`community_space`]) whose policy names the community's app, and only
+//! they write in it. The app answers `checkAccess` for it:
+//! - nothing unless the service auth's `iss` is the space's authority, its
+//!   `aud` the app, and its `lxm` `checkAccess`;
+//! - nothing for a space it doesn't map to one of its communities, or whose
+//!   authority isn't a writer;
+//! - nothing, ever, when `repo` names an account: members read through the
+//!   app, and nobody writes into another's space;
+//! - with `repo` absent, `read` only for its own attested client ID, and
+//!   never `write`.
+//!
+//! So the app is the only reader of community spaces, and it checks each
+//! one with [`check_community_policy`] before syncing or serving it.
+//!
 //! A shared list's subscribers are read-only members who can't see each
 //! other. With no published member list, no app can serve the list: each
 //! subscriber's client reads it from the owner's PDS. Personal lists and
@@ -36,7 +51,8 @@ use umbrae_core::policy::MemberAccess;
 use umbrae_core::policy::{ManagedPolicy, MemberPolicy, Policy};
 use umbrae_core::uri::{is_valid_tid, SpaceRef, UriError};
 use umbrae_lexicons::{
-    COMMUNITY_SKEY, EVERYONE_SKEY, FOLLOWERS_SKEY, LIST_SPACE_TYPE, PROFILE_SKEY, SPACE_TYPE,
+    community_skey, is_community_skey, CommunityRef, EVERYONE_SKEY, FOLLOWERS_SKEY,
+    LIST_SPACE_TYPE, PROFILE_SKEY, SPACE_TYPE,
 };
 
 /// The only-me space's key.
@@ -56,9 +72,42 @@ pub fn followers_space(author: &str) -> Result<SpaceRef, UriError> {
     SpaceRef::new(author, SPACE_TYPE, FOLLOWERS_SKEY)
 }
 
-/// A community's space. `community` is the community's own account.
-pub fn community_space(community: &str) -> Result<SpaceRef, UriError> {
-    SpaceRef::new(community, SPACE_TYPE, COMMUNITY_SKEY)
+/// `author`'s own space for `community`. Create it with
+/// [`managed_policy`] naming the community's app, before the first write
+/// there, then call `tools.umbrae.community.registerSpace`.
+pub fn community_space(author: &str, community: &CommunityRef) -> Result<SpaceRef, UriError> {
+    SpaceRef::new(author, SPACE_TYPE, &community_skey(community))
+}
+
+/// Whether `space` has a community space's shape: `tools.umbrae.space`
+/// with a `c-` key. Which community it is takes the ref
+/// ([`check_community_policy`]).
+pub fn is_community_space(space: &SpaceRef) -> bool {
+    space.space_type() == SPACE_TYPE && is_community_skey(space.skey())
+}
+
+/// Check that `space` is a member's space for `community`: the key is
+/// [`community_skey`], and the published policy is a managed one whose
+/// `managingApp` is the community's app. A lookalike, with the same key
+/// and a policy naming another app, fails. The app checks before it syncs
+/// or serves a community space.
+pub fn check_community_policy(
+    space: &SpaceRef,
+    community: &CommunityRef,
+    policy: &Policy,
+) -> Result<(), Misconfigured> {
+    if space.space_type() != SPACE_TYPE {
+        return Err(Misconfigured::NotUmbrae);
+    }
+    if space.skey() != community_skey(community) {
+        return Err(Misconfigured::WrongPolicy);
+    }
+    match policy {
+        Policy::Managed(p) if p.managing_app != community.app() => Err(Misconfigured::WrongPolicy),
+        Policy::Managed(p) if p.publish_policy => Ok(()),
+        Policy::Managed(_) => Err(Misconfigured::Unpublished),
+        _ => Err(Misconfigured::WrongPolicy),
+    }
 }
 
 /// An account's "everyone with Umbrae" space.
@@ -75,12 +124,13 @@ pub fn profile_space(owner: &str) -> Result<SpaceRef, UriError> {
 /// Whether the space's members come from a managing app.
 pub fn is_managed(space: &SpaceRef) -> bool {
     space.space_type() == SPACE_TYPE
-        && (space.skey() == COMMUNITY_SKEY || space.skey() == EVERYONE_SKEY)
+        && (is_community_skey(space.skey()) || space.skey() == EVERYONE_SKEY)
 }
 
 /// The policy a community or everyone space is created with.
 /// `managing_app` is the `did#serviceId` that answers `checkAccess`: for an
-/// everyone space, read for any admitted account and write for the owner.
+/// everyone space, read for any admitted account and write for the owner;
+/// for a community space, the community's app (see the module docs).
 pub fn managed_policy(managing_app: &str) -> Policy {
     Policy::Managed(ManagedPolicy {
         managing_app: managing_app.to_owned(),
@@ -280,6 +330,66 @@ mod tests {
         // And a list space is never a group.
         assert_eq!(check_policy(&l, &p), Err(Misconfigured::NotUmbrae));
         assert!(subscriber().read && !subscriber().write);
+    }
+
+    #[test]
+    fn community_spaces_and_their_policy() {
+        const APP: &str = "did:web:app.example#umbrae_app";
+        let art = CommunityRef::new(APP, "art").unwrap();
+        let s = community_space(ALICE, &art).unwrap();
+        assert_eq!(s.authority(), ALICE);
+        assert_eq!(s.skey(), community_skey(&art));
+        assert!(is_community_space(&s) && is_managed(&s));
+        let p = managed_policy(APP);
+        assert_eq!(check_community_policy(&s, &art, &p), Ok(()));
+        // check_policy, which sees no ref, takes the shape as managed.
+        assert_eq!(check_policy(&s, &p), Ok(()));
+        assert_eq!(
+            check_policy(&s, &group_policy(None)),
+            Err(Misconfigured::WrongPolicy)
+        );
+        // The wrong app: a lookalike naming another app.
+        assert_eq!(
+            check_community_policy(
+                &s,
+                &art,
+                &managed_policy("did:web:other.example#umbrae_app")
+            ),
+            Err(Misconfigured::WrongPolicy)
+        );
+        // The wrong key: another community's space, or a group.
+        let music = CommunityRef::new(APP, "music").unwrap();
+        assert_eq!(
+            check_community_policy(&s, &music, &p),
+            Err(Misconfigured::WrongPolicy)
+        );
+        assert_eq!(
+            check_community_policy(&group_space(ALICE, SKEY).unwrap(), &art, &p),
+            Err(Misconfigured::WrongPolicy)
+        );
+        // The wrong type, under the right key.
+        let listy = SpaceRef::new(ALICE, LIST_SPACE_TYPE, s.skey()).unwrap();
+        assert!(!is_community_space(&listy));
+        assert_eq!(
+            check_community_policy(&listy, &art, &p),
+            Err(Misconfigured::NotUmbrae)
+        );
+        // Unpublished, or not managed.
+        let unpublished = Policy::Managed(ManagedPolicy {
+            managing_app: APP.into(),
+            publish_policy: false,
+        });
+        assert_eq!(
+            check_community_policy(&s, &art, &unpublished),
+            Err(Misconfigured::Unpublished)
+        );
+        assert_eq!(
+            check_community_policy(&s, &art, &group_policy(None)),
+            Err(Misconfigured::WrongPolicy)
+        );
+        // The old fixed key is no community space.
+        let old = SpaceRef::new(ALICE, SPACE_TYPE, "community").unwrap();
+        assert!(!is_community_space(&old) && !is_managed(&old));
     }
 
     #[test]

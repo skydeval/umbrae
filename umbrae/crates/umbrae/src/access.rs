@@ -6,13 +6,20 @@
 //! - **A group** is visible to members with `read`, from the member list the
 //!   PDS publishes into the authority's repo. That list is shown only to
 //!   people who can see the space.
-//! - **A community or everyone space** (a managedspace) is visible to the
-//!   accounts its managing app says may read. The reader fills `members`
-//!   from that app (or is that app): nothing is published in the space.
+//! - **An everyone space** (a managedspace) is visible to the accounts its
+//!   managing app says may read. The reader fills `members` from that app
+//!   (or is that app): nothing is published in the space.
+//! - **A community space** (one writer's space for a community) is read
+//!   only by the community's app, which applies these rules for its
+//!   viewers. It shows only with `community` set, a policy passing
+//!   [`check_community_policy`] for it, and an authority who is a writer
+//!   now. Its records count only when they're the authority's. The app
+//!   fills `members` from its own table: the authority's role, and the
+//!   viewers' (a reader reads, a writer reads and writes).
 //! - **Only me** is visible to the author alone.
 //! - **A record** shows only if its author is the authority or a member
 //!   with `write` (a removed member's records drop out), and its author is
-//!   active.
+//!   active. In a community space, only the authority, while a writer.
 //! - **Always:** a block between viewer and authority or record author
 //!   hides it; an inactive authority hides the whole space; a deleted space
 //!   shows nothing; nobody signed out sees anything.
@@ -21,13 +28,14 @@
 //! A reader can't tell unreadable from missing: callers omit denied records
 //! from lists and answer not-found for a single fetch.
 
-use crate::space::{check_policy, is_only_me};
+use crate::space::{check_community_policy, check_policy, is_community_space, is_only_me};
 use std::collections::BTreeMap;
 use umbrae_core::drisl::Value;
 use umbrae_core::policy::{
     record_key_to_did, MemberAccess, Policy, MEMBER_RECORD, POLICY_RECORD, POLICY_RECORD_RKEY,
 };
 use umbrae_core::uri::{SpaceRecordUri, SpaceRef};
+use umbrae_lexicons::CommunityRef;
 
 type Map = BTreeMap<String, Value>;
 
@@ -82,6 +90,10 @@ pub struct SpaceState {
     pub policy: Option<Policy>,
     pub members: Members,
     pub deleted: bool,
+    /// For a community space: the community it maps to, set by the app
+    /// from its own table. Without it, nobody but the authority sees the
+    /// space.
+    pub community: Option<CommunityRef>,
 }
 
 impl SpaceState {
@@ -91,6 +103,7 @@ impl SpaceState {
             policy,
             members: Members::default(),
             deleted: false,
+            community: None,
         }
     }
 
@@ -123,6 +136,18 @@ impl SpaceState {
         self.space.authority()
     }
 
+    /// For a community space: the ref is set, the policy passes
+    /// [`check_community_policy`] for it, and the authority is a writer.
+    fn community_ok(&self) -> bool {
+        match (&self.community, &self.policy) {
+            (Some(c), Some(p)) => {
+                check_community_policy(&self.space, c, p).is_ok()
+                    && self.member(self.authority()).write
+            }
+            _ => false,
+        }
+    }
+
     fn member(&self, did: &str) -> MemberAccess {
         let none = MemberAccess {
             read: false,
@@ -150,6 +175,7 @@ pub fn can_view_space(viewer: Option<&str>, state: &SpaceState, ctx: &impl ViewC
         return true;
     }
     check_policy(&state.space, policy).is_ok()
+        && (!is_community_space(&state.space) || state.community_ok())
         && state.member(viewer).read
         && ctx.is_active(viewer) == Tri::Yes
         && ctx.blocked(viewer, state.authority()) == Tri::No
@@ -164,9 +190,34 @@ pub fn visible_members<'a>(
     can_view_space(viewer, state, ctx).then_some(&state.members)
 }
 
-/// Whether a record's author counts as a writer in the space.
+/// Whether a record's author counts as a writer in the space. In a
+/// community space only the authority does, and only while the app says
+/// it's a writer.
 pub fn is_writer(author: &str, state: &SpaceState) -> bool {
+    if is_community_space(&state.space) {
+        return author == state.authority() && state.member(author).write;
+    }
     author == state.authority() || state.member(author).write
+}
+
+/// Whether two states are spaces of one community: both community spaces
+/// of the same type and key, mapped to the same ref, and each passing
+/// [`check_community_policy`] for it. A lookalike naming another app fails.
+pub fn in_same_community(a: &SpaceState, b: &SpaceState) -> bool {
+    let (Some(ca), Some(cb)) = (&a.community, &b.community) else {
+        return false;
+    };
+    let checks = |s: &SpaceState, c: &CommunityRef| {
+        s.policy
+            .as_ref()
+            .is_some_and(|p| check_community_policy(&s.space, c, p).is_ok())
+    };
+    is_community_space(&a.space)
+        && a.space.space_type() == b.space.space_type()
+        && a.space.skey() == b.space.skey()
+        && ca == cb
+        && checks(a, ca)
+        && checks(b, cb)
 }
 
 /// Whether `viewer` may see one record of the space.
@@ -207,25 +258,35 @@ pub fn can_view_bookmark(
         && subject_space.is_some_and(|s| can_view_record(viewer, subject, s, ctx))
 }
 
-/// Whether `viewer` may see a repost: it and the post it reposts are in
-/// the same space (`state`), and they may see both. A repost naming a post
-/// in any other space never shows.
+/// Whether `viewer` may see a repost, given the repost's space state and
+/// the reposted post's. Outside communities both are in the same space; in
+/// a community, in two spaces of it ([`in_same_community`]). They may see
+/// both. A repost naming a post anywhere else never shows.
 pub fn can_view_repost(
     viewer: Option<&str>,
     repost: &SpaceRecordUri,
+    repost_space: &SpaceState,
     subject: &SpaceRecordUri,
-    state: &SpaceState,
+    subject_space: &SpaceState,
     ctx: &impl ViewContext,
 ) -> bool {
-    repost.space() == subject.space()
-        && can_view_record(viewer, repost, state, ctx)
-        && can_view_record(viewer, subject, state, ctx)
+    let linked = if is_community_space(repost.space()) {
+        in_same_community(repost_space, subject_space)
+    } else {
+        repost.space() == subject.space()
+    };
+    linked
+        && can_view_record(viewer, repost, repost_space, ctx)
+        && can_view_record(viewer, subject, subject_space, ctx)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::space::{group_policy, group_space, only_me_policy, only_me_space};
+    use crate::space::{
+        community_space, everyone_space, group_policy, group_space, managed_policy, only_me_policy,
+        only_me_space,
+    };
     use std::collections::BTreeSet;
     use umbrae_lexicons::POST;
 
@@ -389,21 +450,34 @@ mod tests {
             .space
             .record(BOB, umbrae_lexicons::REPOST, "3mbaaaaaaaaa5")
             .unwrap();
-        assert!(can_view_repost(Some(DAVE), &rp, &p, &g, &c));
+        assert!(can_view_repost(Some(DAVE), &rp, &g, &p, &g, &c));
         let stranger = "did:plc:strangerssssssssssssssssss";
-        assert!(!can_view_repost(Some(stranger), &rp, &p, &g, &c));
-        assert!(!can_view_repost(None, &rp, &p, &g, &c));
+        assert!(!can_view_repost(Some(stranger), &rp, &g, &p, &g, &c));
+        assert!(!can_view_repost(None, &rp, &g, &p, &g, &c));
         // Once the reposter leaves, their repost drops out.
         let mut left = group();
         left.members = Members::default();
         left.members.insert(DAVE, rw(true, false));
-        assert!(!can_view_repost(Some(DAVE), &rp, &p, &left, &c));
+        assert!(!can_view_repost(Some(DAVE), &rp, &left, &p, &left, &c));
         // A repost whose subject is in another space never shows.
         let elsewhere = crate::space::group_space(ALICE, "3mbbbbbbbbbb3")
             .unwrap()
             .record(ALICE, umbrae_lexicons::POST, "3mbaaaaaaaaa2")
             .unwrap();
-        assert!(!can_view_repost(Some(ALICE), &rp, &elsewhere, &g, &c));
+        assert!(!can_view_repost(Some(ALICE), &rp, &g, &elsewhere, &g, &c));
+        // Nor with that space's own state: two groups aren't one.
+        let mut other = SpaceState::new(elsewhere.space().clone(), Some(group_policy(None)));
+        other.members.insert(BOB, rw(true, true));
+        other.members.insert(DAVE, rw(true, false));
+        assert!(can_view_record(Some(DAVE), &elsewhere, &other, &c));
+        assert!(!can_view_repost(
+            Some(DAVE),
+            &rp,
+            &g,
+            &elsewhere,
+            &other,
+            &c
+        ));
         // The repost still shows on its own, but the post it reposts
         // doesn't: its author left, or the viewer blocks them. Then the
         // repost hides too.
@@ -412,15 +486,185 @@ mod tests {
             .space
             .record(ALICE, umbrae_lexicons::REPOST, "3mbaaaaaaaaa6")
             .unwrap();
-        assert!(can_view_repost(Some(DAVE), &arp, &bobs, &g, &c));
+        assert!(can_view_repost(Some(DAVE), &arp, &g, &bobs, &g, &c));
         assert!(can_view_record(Some(DAVE), &arp, &left, &c));
-        assert!(!can_view_repost(Some(DAVE), &arp, &bobs, &left, &c));
+        assert!(!can_view_repost(Some(DAVE), &arp, &left, &bobs, &left, &c));
         let blocks = Ctx {
             blocks: BTreeSet::from([(DAVE, BOB)]),
             ..Ctx::default()
         };
         assert!(can_view_record(Some(DAVE), &arp, &g, &blocks));
-        assert!(!can_view_repost(Some(DAVE), &arp, &bobs, &g, &blocks));
+        assert!(!can_view_repost(Some(DAVE), &arp, &g, &bobs, &g, &blocks));
+    }
+
+    const APP: &str = "did:web:app.example#umbrae_app";
+
+    fn art() -> CommunityRef {
+        CommunityRef::new(APP, "art").unwrap()
+    }
+
+    /// `author`'s space for the art community, as its app holds it: the
+    /// app's roles for `roles`, Alice and Bob writers and Dave a reader by
+    /// default.
+    fn community_space_of(author: &str, roles: &[(&str, MemberAccess)]) -> SpaceState {
+        let mut s = SpaceState::new(
+            community_space(author, &art()).unwrap(),
+            Some(managed_policy(APP)),
+        );
+        s.community = Some(art());
+        for (did, a) in [
+            (ALICE, rw(true, true)),
+            (BOB, rw(true, true)),
+            (DAVE, rw(true, false)),
+        ] {
+            s.members.insert(did, a);
+        }
+        for (did, a) in roles {
+            s.members.insert(did, *a);
+        }
+        s
+    }
+
+    #[test]
+    fn community_spaces_count_only_their_writer_authority() {
+        let c = Ctx::default();
+        let alices = community_space_of(ALICE, &[]);
+        let post =
+            |s: &SpaceState, author: &str| s.space.record(author, POST, "3mbaaaaaaaaa2").unwrap();
+        // Members, readers included, see Alice's posts; Carol doesn't.
+        for v in [ALICE, BOB, DAVE] {
+            assert!(
+                can_view_record(Some(v), &post(&alices, ALICE), &alices, &c),
+                "{v}"
+            );
+        }
+        assert!(!can_view_space(Some(CAROL), &alices, &c));
+        // A record by anyone else in Alice's space doesn't count, a writer's
+        // included.
+        for author in [BOB, DAVE, CAROL] {
+            assert!(!is_writer(author, &alices));
+            assert!(!can_view_record(
+                Some(ALICE),
+                &post(&alices, author),
+                &alices,
+                &c
+            ));
+        }
+        assert!(!can_write(BOB, &alices, &c));
+        // A reader's own space, a non-member's, and a removed writer's are
+        // invisible to everyone else.
+        let daves = community_space_of(DAVE, &[]);
+        let carols = community_space_of(CAROL, &[]);
+        let removed = community_space_of(ALICE, &[(ALICE, rw(false, false))]);
+        for (s, author) in [(&daves, DAVE), (&carols, CAROL), (&removed, ALICE)] {
+            for v in [ALICE, BOB, DAVE, CAROL]
+                .into_iter()
+                .filter(|v| *v != author)
+            {
+                assert!(!can_view_space(Some(v), s, &c), "{author} to {v}");
+                assert!(!can_view_record(Some(v), &post(s, author), s, &c));
+            }
+            assert!(!is_writer(author, s));
+        }
+        // With no answer for the authority: not a member (fail closed).
+        let mut unknown = community_space_of(ALICE, &[]);
+        unknown.members = Members::default();
+        unknown.members.insert(BOB, rw(true, true));
+        assert!(!can_view_space(Some(BOB), &unknown, &c));
+        // Bob's reply to Alice's post, in his own space, stays when she's
+        // removed.
+        let bobs = community_space_of(BOB, &[(ALICE, rw(false, false))]);
+        assert!(can_view_record(Some(DAVE), &post(&bobs, BOB), &bobs, &c));
+        // Current role: once Alice is a writer again, her posts show again.
+        let back = community_space_of(ALICE, &[(ALICE, rw(true, true))]);
+        assert!(can_view_record(Some(DAVE), &post(&back, ALICE), &back, &c));
+    }
+
+    #[test]
+    fn a_community_space_needs_its_ref_and_policy() {
+        let c = Ctx::default();
+        let mut no_ref = community_space_of(ALICE, &[]);
+        no_ref.community = None;
+        assert!(can_view_space(Some(ALICE), &no_ref, &c));
+        for v in [BOB, DAVE, CAROL] {
+            assert!(!can_view_space(Some(v), &no_ref, &c), "{v}");
+        }
+        // Mapped to another community, or a policy naming another app.
+        let mut other = community_space_of(ALICE, &[]);
+        other.community = Some(CommunityRef::new(APP, "music").unwrap());
+        assert!(!can_view_space(Some(BOB), &other, &c));
+        let mut lookalike = community_space_of(ALICE, &[]);
+        lookalike.policy = Some(managed_policy("did:web:other.example#umbrae_app"));
+        assert!(!can_view_space(Some(BOB), &lookalike, &c));
+    }
+
+    #[test]
+    fn everyone_spaces_keep_the_authority_shortcut() {
+        let c = Ctx::default();
+        let mut e = SpaceState::new(everyone_space(ALICE).unwrap(), Some(managed_policy(APP)));
+        // The app answers for Bob, the viewer, and nothing for Alice.
+        e.members.insert(BOB, rw(true, false));
+        let post = e.space.record(ALICE, POST, "3mbaaaaaaaaa2").unwrap();
+        assert!(is_writer(ALICE, &e));
+        assert!(can_view_record(Some(BOB), &post, &e, &c));
+        assert!(!can_view_record(Some(CAROL), &post, &e, &c));
+    }
+
+    #[test]
+    fn community_reposts_cross_members_spaces() {
+        let c = Ctx::default();
+        let alices = community_space_of(ALICE, &[]);
+        let bobs = community_space_of(BOB, &[]);
+        let post = alices.space.record(ALICE, POST, "3mbaaaaaaaaa2").unwrap();
+        let rp = bobs
+            .space
+            .record(BOB, umbrae_lexicons::REPOST, "3mbaaaaaaaaa5")
+            .unwrap();
+        assert!(can_view_repost(Some(DAVE), &rp, &bobs, &post, &alices, &c));
+        assert!(!can_view_repost(
+            Some(CAROL),
+            &rp,
+            &bobs,
+            &post,
+            &alices,
+            &c
+        ));
+        // Its subject's state must be the subject's space.
+        assert!(!can_view_repost(Some(DAVE), &rp, &bobs, &post, &bobs, &c));
+        // A lookalike: Alice's space under the same key, naming another app.
+        let mut lookalike = community_space_of(ALICE, &[]);
+        lookalike.policy = Some(managed_policy("did:web:other.example#umbrae_app"));
+        assert!(!in_same_community(&bobs, &lookalike));
+        assert!(!can_view_repost(
+            Some(DAVE),
+            &rp,
+            &bobs,
+            &post,
+            &lookalike,
+            &c
+        ));
+        // Mapped to different communities: not one.
+        let mut elsewhere = community_space_of(ALICE, &[]);
+        elsewhere.community = Some(CommunityRef::new(APP, "music").unwrap());
+        assert!(!can_view_repost(
+            Some(DAVE),
+            &rp,
+            &bobs,
+            &post,
+            &elsewhere,
+            &c
+        ));
+        // Alice removed: her post, and so the repost, drop out.
+        let removed = community_space_of(ALICE, &[(ALICE, rw(false, false))]);
+        assert!(!can_view_repost(
+            Some(DAVE),
+            &rp,
+            &bobs,
+            &post,
+            &removed,
+            &c
+        ));
+        assert!(can_view_record(Some(DAVE), &rp, &bobs, &c));
     }
 
     #[test]

@@ -9,6 +9,8 @@ Space type `tools.umbrae.space`. The author's DID is the authority.
 | a group | a TID | memberspace: not public, policy published, member list published |
 | only me | `self` | personalspace: only the authority |
 
+Other audiences have their own keys: a private account's `followers`, the `everyone` space, the `profile` space, and each writer's own space for a community, keyed `c-` plus 32 base32 characters (see [Communities](communities.md)).
+
 - **Groups:**
   - The group's name is a `tools.umbrae.group` record at rkey `self`, written by the authority.
   - Members are added with `putMembers` and get `read` and `write`.
@@ -41,9 +43,11 @@ Each person writes into **their own repo** in the space. A member's reply, like 
 
 So a reply, like, repost or quote of a hidden post never reaches anyone outside that post's audience.
 
+The placement helpers take the actor. **In a community**, everyone writes only into their own space: a reply, like, repost or quote of a post in a community space goes into the actor's own space for the same community (same type and key), whose audience is the same community. A reply that also quotes goes there too.
+
 ## Validation
 
-`validate_record(uri, value)` applies the lexicon's constraints plus these rules. A record that fails is dropped.
+`validate_record(uri, value)` applies the lexicon's constraints plus these rules. A record that fails is dropped. In a community space, "its own space" below means any space of the same type and key, so a record may name posts in other members' spaces for the same community, never another community's.
 
 - **Replies:**
   - a hidden reply parent or root must be in the reply's own space;
@@ -72,6 +76,6 @@ So a reply, like, repost or quote of a hidden post never reaches anyone outside 
   - anything unknown.
 - **Records drop out:** records from repos that aren't current writers are hidden, so a removed member's replies and likes disappear with them.
 - **The rest:**
-  - `can_view_repost`: the viewer may see both the repost and its subject, in the same space.
+  - `can_view_repost`: the viewer may see both the repost and its subject, given both spaces' states: the same space, or in a community, two spaces of it.
   - `can_view_bookmark`: only its owner, and only while they may still see the bookmarked post.
   - A quoted hidden post is looked up in its own space's state. If the viewer can't see it, it shows as unavailable, while the quoting post still shows.

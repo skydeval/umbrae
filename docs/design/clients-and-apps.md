@@ -10,10 +10,13 @@
 | the user's own groups and only-me (create, members, delete) | `space:tools.umbrae.space?collection=tools.umbrae.group&collection=tools.umbrae.bookmark&collection=tools.umbrae.list&collection=tools.umbrae.listitem&collection=tools.umbrae.exemption&manage=create&manage=update&manage=delete` |
 | own shared lists | `space:tools.umbrae.listSpace?collection=tools.umbrae.list&collection=tools.umbrae.listitem&manage=create&manage=update&manage=delete` |
 | reading lists the user subscribes to | `space:tools.umbrae.listSpace?authority=*&action=read` |
-| the user's hidden profile (create the profile space, write the record) | `space:tools.umbrae.space?skey=profile&collection=tools.umbrae.profile&manage=create` |
+| the user's own community spaces (create one, then post, reply, like, repost, feed and gate there) | `space:tools.umbrae.space?collection=tools.umbrae.post&collection=tools.umbrae.like&collection=tools.umbrae.repost&collection=tools.umbrae.feed&collection=tools.umbrae.threadgate&collection=tools.umbrae.postgate&manage=create` |
+| the user's hidden profile (create the profile space, write the record, add a community app to `allowedApps`) | `space:tools.umbrae.space?skey=profile&collection=tools.umbrae.profile&manage=create&manage=update` |
 | a serving app that fetches the owner's profile delegations itself | `space:tools.umbrae.space?skey=profile&action=read` |
 
-`manage=create` covers `createSpace`, `manage=update` covers `putMembers` and `removeMembers`, and `manage=delete` covers `deleteSpace`.
+`manage=create` covers `createSpace`, `manage=update` covers `putMembers`, `removeMembers` and `updateSpace`, and `manage=delete` covers `deleteSpace`.
+
+A community space is only ever read by its author and the community's app, so no client asks for `authority=*` on one: members read communities through the app.
 
 ## Reading another account's space
 
@@ -33,6 +36,8 @@ The only way to a space credential is `authorizeSpaceSync`. Clients and serving 
    - `getRecord`, `listRepoOps` or `getBlob`.
 
    Space `getBlob` carries no MAC, so check the blob's CID.
+
+A community's app reads members' community spaces without a delegation: step 2 alone, with its own client attestation and no `delegationToken`. The space's policy names the app, which answers `read` for its own attested client while the space's authority is a writer, and nothing for any account.
 
 `umbrae-sync` does all of this for an admitted serving app, over a transport the caller supplies:
 - authorization and credentials;

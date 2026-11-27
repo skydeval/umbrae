@@ -4,20 +4,21 @@
   "defs": {
     "main": {
       "type": "procedure",
-      "description": "Remove a member: their access ends at once, and the managing app removes them as a writer, so their posts leave the community. Not the community account itself. Moderators only: the community account and the accounts its managing app names. Served by the managing app named in the community space's policy, at its #umbrae_app endpoint, with atproto service auth (iss the caller, aud the managing app, lxm this method); clients call through their PDS with atproto-proxy set to the policy's managingApp. Any managing app may serve it: a serving app, or a PDS that manages its own communities.",
+      "description": "Remove a member: at the app's next request the community no longer shows to them, and their posts, earlier ones included, no longer show to it. The app stops syncing their community space, whose records stay in their repo. Others' replies to their posts stay, under a placeholder. Moderators only: the accounts its managing app names. Served by the community's managing app, at the service its ref's app names, with atproto service auth (iss the caller, aud the app, lxm this method); clients call through their PDS with atproto-proxy set to the ref's app. Any managing app may serve it: a serving app, or a PDS that manages its own communities.",
       "input": {
         "encoding": "application/json",
         "schema": {
           "type": "object",
           "required": [
-            "community",
+            "key",
             "did"
           ],
           "properties": {
-            "community": {
+            "key": {
               "type": "string",
-              "format": "did",
-              "description": "The community account's DID."
+              "minLength": 1,
+              "maxLength": 63,
+              "description": "The community's key within this app."
             },
             "did": {
               "type": "string",

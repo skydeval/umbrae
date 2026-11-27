@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A like of a hidden post, written into the liked post's space.",
+      "description": "A like of a hidden post, written into the liked post's space; in a community, into the liker's own space for that community.",
       "key": "tid",
       "record": {
         "type": "object",

@@ -39,8 +39,8 @@ mod social;
 mod validate;
 
 pub use community::{
-    validate_community_declaration, CommunityDeclaration, Feed, ListSubscription,
-    MAX_FEEDS_PER_POST, MAX_FEED_AUTHORS,
+    community_skey, is_community_skey, CommunityRef, Feed, ListSubscription, MAX_FEEDS_PER_POST,
+    MAX_FEED_AUTHORS,
 };
 pub use migrate::upgrade_space_uris;
 
@@ -87,17 +87,18 @@ pub const COMMUNITY_LIST_MEMBERS: &str = "tools.umbrae.community.listMembers";
 pub const COMMUNITY_DECIDE: &str = "tools.umbrae.community.decide";
 pub const COMMUNITY_INVITE: &str = "tools.umbrae.community.invite";
 pub const COMMUNITY_REMOVE: &str = "tools.umbrae.community.remove";
-/// A community's public declaration of its managing app, at `self` in its
-/// public repo.
-pub const COMMUNITY_DECLARATION: &str = "tools.umbrae.community.declaration";
+pub const COMMUNITY_LIST_MINE: &str = "tools.umbrae.community.listMyCommunities";
+pub const COMMUNITY_REGISTER_SPACE: &str = "tools.umbrae.community.registerSpace";
+pub const COMMUNITY_REGISTER_PROFILE: &str = "tools.umbrae.community.registerProfile";
+/// Shared community definitions: `#communityRef` and `#unavailablePost`.
+pub const COMMUNITY_DEFS: &str = "tools.umbrae.community.defs";
+/// The placeholder a community app shows for a post the viewer can't see.
+pub const UNAVAILABLE_POST: &str = "tools.umbrae.community.defs#unavailablePost";
 /// Reading a hidden profile through the viewer's serving app.
 pub const ACTOR_GET_PROFILE: &str = "tools.umbrae.actor.getProfile";
 pub const ACTOR_GET_PROFILE_BLOB: &str = "tools.umbrae.actor.getProfileBlob";
 /// The followers space's key: a private account's approved followers.
 pub const FOLLOWERS_SKEY: &str = "followers";
-/// A community's space key: the space whose authority is the community's
-/// own account, with membership held by its managing app.
-pub const COMMUNITY_SKEY: &str = "community";
 /// An account's "everyone with Umbrae" space key.
 pub const EVERYONE_SKEY: &str = "everyone";
 /// An account's profile space key: the one space that holds its hidden
@@ -214,8 +215,20 @@ pub const LEXICONS: &[(&str, &str)] = &[
         include_str!("../lexicons/tools/umbrae/community/remove.json"),
     ),
     (
-        COMMUNITY_DECLARATION,
-        include_str!("../lexicons/tools/umbrae/community/declaration.json"),
+        COMMUNITY_LIST_MINE,
+        include_str!("../lexicons/tools/umbrae/community/listMyCommunities.json"),
+    ),
+    (
+        COMMUNITY_REGISTER_SPACE,
+        include_str!("../lexicons/tools/umbrae/community/registerSpace.json"),
+    ),
+    (
+        COMMUNITY_REGISTER_PROFILE,
+        include_str!("../lexicons/tools/umbrae/community/registerProfile.json"),
+    ),
+    (
+        COMMUNITY_DEFS,
+        include_str!("../lexicons/tools/umbrae/community/defs.json"),
     ),
     (
         ACTOR_GET_PROFILE,
@@ -243,8 +256,18 @@ mod tests {
             let v: Value = serde_json::from_str(doc).unwrap();
             assert_eq!(v["lexicon"], 1, "{nsid}");
             assert_eq!(v["id"], *nsid);
-            assert!(v["defs"]["main"].is_object(), "{nsid}");
+            // A defs document holds only named definitions.
+            assert_eq!(
+                v["defs"]["main"].is_object(),
+                !nsid.ends_with(".defs"),
+                "{nsid}"
+            );
         }
+        let defs: Value = serde_json::from_str(get(COMMUNITY_DEFS).unwrap()).unwrap();
+        assert!(defs["defs"]["communityRef"].is_object());
+        let (doc, name) = UNAVAILABLE_POST.split_once('#').unwrap();
+        assert_eq!(doc, COMMUNITY_DEFS);
+        assert!(defs["defs"][name].is_object());
         assert!(get(POST).is_some());
         assert!(get("tools.umbrae.nope").is_none());
     }

@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "An author-driven feed in a community: no algorithm. Written by its builder in their own repo in the community space (key community). It shows posts that name it in post.feeds, from accounts on its current authors list who are current members. Readable by the whole community.",
+      "description": "An author-driven feed in a community: no algorithm. Written by its builder in their own community space (a key starting c-). It shows posts that name it in post.feeds, from any member's space for the same community, by accounts on its current authors list who are current writers. Readable by the whole community, through its app.",
       "key": "tid",
       "record": {
         "type": "object",

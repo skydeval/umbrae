@@ -1,0 +1,58 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.community.registerProfile",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Hand the app the caller's hidden profile, so it can show the profile to the community audiences it lists. The token is the caller's own fresh delegation for their profile space (tools.umbrae.space at profile); the app syncs the space at once, with the token and its own attestation. A client calls this after every write to the profile space, at every community app named in the audiences before or after the write, and again after rejoining a community its profile lists. The app keeps a profile only while its owner is a member of one of its communities. Members only, and rate-limited per caller. Served by the community's managing app, at the service its ref's app names, with atproto service auth (iss the caller, aud the app, lxm this method); clients call through their PDS with atproto-proxy set to the ref's app.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "key",
+            "delegationToken"
+          ],
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 63,
+              "description": "The key of a community the caller belongs to at this app."
+            },
+            "delegationToken": {
+              "type": "string",
+              "description": "The caller's delegation token for their own profile space, from com.atproto.space.getDelegationToken."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {}
+        }
+      },
+      "errors": [
+        {
+          "name": "CommunityNotFound",
+          "description": "Not a community this managing app manages."
+        },
+        {
+          "name": "NotAllowed",
+          "description": "The caller isn't a member."
+        },
+        {
+          "name": "NotAdmitted",
+          "description": "The managing app doesn't admit this account."
+        },
+        {
+          "name": "ProfileNotFound",
+          "description": "The app couldn't sync the profile space: none exists, the token was refused, or its client isn't in the space's allowedApps."
+        }
+      ]
+    }
+  }
+}

@@ -40,7 +40,7 @@ const RETIRED: &str = "2026-11-13T10:30:00.000Z";
 const AUDIENCE: &str = "3mbaaaaaaace2";
 /// The audience's only member: never an account here, just a DID.
 const MOD: &str = "did:plc:moddddddddddddddddddddddd";
-const KID: &str = "interop-key-1";
+pub(crate) const KID: &str = "interop-key-1";
 
 struct Everyone;
 
@@ -56,13 +56,13 @@ impl ViewContext for Everyone {
 
 /// A client the PDS can resolve: its metadata, with the public half of its
 /// attestation key, written where the TLS server in front of it serves.
-struct Client {
-    id: String,
-    signer: Signer,
+pub(crate) struct Client {
+    pub(crate) id: String,
+    pub(crate) signer: Signer,
 }
 
 impl Client {
-    fn publish(dir: &str, name: &str) -> Result<Self, String> {
+    pub(crate) fn publish(dir: &str, name: &str) -> Result<Self, String> {
         let key = SigningKey::random(&mut OsRng);
         let point = key.verifying_key().to_encoded_point(false);
         let (x, y) = (point.x().ok_or("no x")?, point.y().ok_or("no y")?);
@@ -91,7 +91,7 @@ impl Client {
         })
     }
 
-    fn attest(&self, authority: &str) -> String {
+    pub(crate) fn attest(&self, authority: &str) -> String {
         tokens::create_client_attestation(
             &self.id,
             authority,

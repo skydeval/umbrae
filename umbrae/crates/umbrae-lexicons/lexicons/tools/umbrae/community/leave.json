@@ -4,19 +4,20 @@
   "defs": {
     "main": {
       "type": "procedure",
-      "description": "Leave a community, withdraw a request, or decline an invitation. Served by the managing app named in the community space's policy, at its #umbrae_app endpoint, with atproto service auth (iss the caller, aud the managing app, lxm this method); clients call through their PDS with atproto-proxy set to the policy's managingApp. Any managing app may serve it: a serving app, or a PDS that manages its own communities.",
+      "description": "Leave a community, withdraw a request, or decline an invitation. Leaving takes the caller's posts out of the community, as removal does. Served by the community's managing app, at the service its ref's app names, with atproto service auth (iss the caller, aud the app, lxm this method); clients call through their PDS with atproto-proxy set to the ref's app. Any managing app may serve it: a serving app, or a PDS that manages its own communities.",
       "input": {
         "encoding": "application/json",
         "schema": {
           "type": "object",
           "required": [
-            "community"
+            "key"
           ],
           "properties": {
-            "community": {
+            "key": {
               "type": "string",
-              "format": "did",
-              "description": "The community account's DID."
+              "minLength": 1,
+              "maxLength": 63,
+              "description": "The community's key within this app."
             }
           }
         }

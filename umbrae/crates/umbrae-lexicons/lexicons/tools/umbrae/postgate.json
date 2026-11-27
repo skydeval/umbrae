@@ -24,7 +24,7 @@
               "type": "string",
               "format": "at-uri"
             },
-            "description": "Quotes, in this space, shown without this post."
+            "description": "Quotes, in this space, shown without this post. In a community, quotes in any space of the same type and key."
           },
           "embeddingRules": {
             "type": "array",

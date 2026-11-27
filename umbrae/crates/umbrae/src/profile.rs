@@ -6,7 +6,9 @@
 //! shows the profile, and serves its blobs, to anyone in a listed audience:
 //! - **followers:** members of the owner's followers space;
 //! - **a group:** members of one of the owner's groups;
-//! - **a community:** members of the community, while the owner is still one;
+//! - **a community:** its members, readers and writers, while the owner is
+//!   still one. Only the community's own app serves this audience: it alone
+//!   knows the membership ([`AudienceSource::community_member`]);
 //! - **everyone:** anyone the serving app admits.
 //!
 //! Every audience sees the same record, so an edit reaches all of them at
@@ -16,17 +18,29 @@
 //! `getProfileBlob`. After every write to the profile space, the owner's
 //! client hands the serving app a fresh delegation so it re-syncs.
 //!
+//! A community app gets the profile through
+//! `tools.umbrae.community.registerProfile {key, delegationToken}`, which
+//! the owner's client calls after every write to the profile space, at
+//! every community app named in the audiences before or after the write,
+//! and again after rejoining. A profile space limited by `allowedApps`
+//! must list the app's `appClientId` first. The app keeps a profile only
+//! while its owner is a member of one of its communities. Every app that
+//! reads the profile reads the whole record, its audience list included:
+//! the owner's client says so before the first community audience is
+//! added.
+//!
 //! Before 0.7.3 a profile had one copy per audience. Those copies are
 //! legacy: read them with [`crate::community::profile_for_viewer`] only
 //! until the owner has, or has deleted, a profile space. Migration lists
 //! only the audiences whose copy matches the newest, and the owner
 //! confirms before the copies are deleted.
 
-use crate::access::{can_view_record, can_view_space, is_writer, SpaceState, Tri, ViewContext};
+use crate::access::{can_view_record, can_view_space, SpaceState, Tri, ViewContext};
+use crate::community::Role;
 use crate::space::{check_policy, followers_space};
 use umbrae_core::cid::Cid;
 use umbrae_core::uri::{SpaceRecordUri, SpaceRef};
-use umbrae_lexicons::{Audience, Profile, PROFILE, PROFILE_SKEY, SELF_RKEY};
+use umbrae_lexicons::{Audience, CommunityRef, Profile, PROFILE, PROFILE_SKEY, SELF_RKEY};
 
 /// What a serving app knows about a profile's audiences.
 pub trait AudienceSource {
@@ -35,6 +49,13 @@ pub trait AudienceSource {
     fn state(&self, space: &SpaceRef) -> Option<&SpaceState>;
     /// Whether it admits `viewer`: the "everyone with Umbrae" audience.
     fn admits(&self, viewer: &str) -> bool;
+    /// `did`'s role in `community`, from the app's own table. An app
+    /// answers `None` for a community it doesn't keep, so there a community
+    /// audience grants nothing.
+    fn community_member(&self, community: &CommunityRef, did: &str) -> Option<Role> {
+        let _ = (community, did);
+        None
+    }
 }
 
 /// Whether `uri` is the owner's one profile, in a sound profile space: at
@@ -93,7 +114,8 @@ pub fn can_view_profile(
         Audience::Followers => followers_space(owner).is_ok_and(|f| member_of(&f)),
         Audience::Group(g) => g.authority() == owner && member_of(g),
         Audience::Community(c) => {
-            member_of(c) && audiences.state(c).is_some_and(|s| is_writer(owner, s))
+            audiences.community_member(c, viewer).is_some()
+                && audiences.community_member(c, owner).is_some()
         }
         Audience::Everyone => audiences.admits(viewer),
         _ => false,
@@ -119,7 +141,7 @@ pub fn can_view_profile_blob(
 mod tests {
     use super::*;
     use crate::access::Tri;
-    use crate::space::{community_space, group_policy, group_space, managed_policy, profile_space};
+    use crate::space::{group_policy, group_space, managed_policy, profile_space};
     use std::collections::BTreeMap;
     use umbrae_core::drisl::Value;
     use umbrae_core::policy::MemberAccess;
@@ -132,7 +154,6 @@ mod tests {
     const BOB: &str = "did:plc:bobbbbbbbbbbbbbbbbbbbbbb";
     const CAROL: &str = "did:plc:carolcccccccccccccccccccc";
     const DAN: &str = "did:plc:danddddddddddddddddddddd";
-    const COMMUNITY: &str = "did:plc:communityccccccccccccccc";
     const APP: &str = "did:web:app.example#umbrae_app";
     const GROUP: &str = "3mbbbbbbbbbb2";
     fn png() -> Cid {
@@ -165,6 +186,8 @@ mod tests {
     struct Source {
         states: Vec<SpaceState>,
         admitted: Vec<&'static str>,
+        /// The communities this app keeps: (key, member, role).
+        communities: Vec<(&'static str, &'static str, Role)>,
     }
     impl AudienceSource for Source {
         fn state(&self, space: &SpaceRef) -> Option<&SpaceState> {
@@ -173,6 +196,34 @@ mod tests {
         fn admits(&self, viewer: &str) -> bool {
             self.admitted.contains(&viewer)
         }
+        fn community_member(&self, community: &CommunityRef, did: &str) -> Option<Role> {
+            if community.app() != APP {
+                return None;
+            }
+            self.communities
+                .iter()
+                .find(|(k, d, _)| *k == community.key() && *d == did)
+                .map(|(_, _, r)| *r)
+        }
+    }
+
+    /// An app that keeps no community, only the states and admissions.
+    struct Plain(Source);
+    impl AudienceSource for Plain {
+        fn state(&self, space: &SpaceRef) -> Option<&SpaceState> {
+            self.0.state(space)
+        }
+        fn admits(&self, viewer: &str) -> bool {
+            self.0.admits(viewer)
+        }
+    }
+
+    fn community(key: &str) -> Value {
+        let r = BTreeMap::from([("app".to_string(), t(APP)), ("key".to_string(), t(key))]);
+        Value::Map(BTreeMap::from([
+            ("$type".to_string(), t(AUDIENCE_COMMUNITY)),
+            ("community".to_string(), Value::Map(r)),
+        ]))
     }
 
     fn rw() -> MemberAccess {
@@ -235,25 +286,28 @@ mod tests {
     #[test]
     fn each_audience_sees_the_one_profile() {
         let group = group_space(ALICE, GROUP).unwrap();
-        let community = community_space(COMMUNITY).unwrap();
         let followers = followers_space(ALICE).unwrap();
         let p = parse(&record(vec![
             audience(AUDIENCE_GROUP, Some(&group)),
-            audience(AUDIENCE_COMMUNITY, Some(&community)),
+            community("art"),
         ]));
+        assert_eq!(
+            p.audiences.as_ref().unwrap()[1],
+            Audience::Community(CommunityRef::new(APP, "art").unwrap())
+        );
         let home = state(profile_space(ALICE).unwrap(), group_policy(None), &[]);
         let src = Source {
             states: vec![
                 state(group.clone(), group_policy(None), &[BOB]),
-                state(community.clone(), managed_policy(APP), &[ALICE, CAROL]),
                 state(followers, group_policy(None), &[DAN]),
             ],
             admitted: vec![BOB, CAROL, DAN],
+            communities: vec![("art", ALICE, Role::Writer), ("art", CAROL, Role::Reader)],
         };
         let sees = |v| can_view_profile(Some(v), &uri(), &p, &home, &src, &OK);
         assert!(sees(ALICE), "the owner");
         assert!(sees(BOB), "a group member");
-        assert!(sees(CAROL), "a community member");
+        assert!(sees(CAROL), "a community member, a reader");
         assert!(!sees(DAN), "a follower, when followers aren't listed");
         assert!(!can_view_profile(None, &uri(), &p, &home, &src, &OK));
 
@@ -288,28 +342,73 @@ mod tests {
 
     #[test]
     fn followers_everyone_and_leaving_a_community() {
-        let community = community_space(COMMUNITY).unwrap();
         let home = state(profile_space(ALICE).unwrap(), group_policy(None), &[]);
         let followers = state(followers_space(ALICE).unwrap(), group_policy(None), &[DAN]);
         let p = parse(&record(vec![
             audience(AUDIENCE_FOLLOWERS, None),
-            audience(AUDIENCE_COMMUNITY, Some(&community)),
+            community("art"),
         ]));
-        // Alice left the community: its members no longer see her profile.
-        let src = Source {
-            states: vec![
-                followers.clone(),
-                state(community, managed_policy(APP), &[CAROL]),
-            ],
-            admitted: vec![],
+        let members = |owner_in: bool| {
+            let mut c = vec![("art", CAROL, Role::Writer), ("music", ALICE, Role::Writer)];
+            if owner_in {
+                c.push(("art", ALICE, Role::Reader));
+            }
+            Source {
+                states: vec![followers.clone()],
+                admitted: vec![],
+                communities: c,
+            }
         };
+        // A reader owner still counts as a member.
+        assert!(can_view_profile(
+            Some(CAROL),
+            &uri(),
+            &p,
+            &home,
+            &members(true),
+            &OK
+        ));
+        // Alice left the community: its members no longer see her profile,
+        // though she's still in another community at this app.
+        let src = members(false);
         assert!(can_view_profile(Some(DAN), &uri(), &p, &home, &src, &OK));
         assert!(!can_view_profile(Some(CAROL), &uri(), &p, &home, &src, &OK));
+        // An app that doesn't keep the community: the audience grants nothing.
+        let plain = Plain(members(true));
+        assert!(plain
+            .community_member(&CommunityRef::new(APP, "art").unwrap(), CAROL)
+            .is_none());
+        assert!(!can_view_profile(
+            Some(CAROL),
+            &uri(),
+            &p,
+            &home,
+            &plain,
+            &OK
+        ));
+        assert!(can_view_profile(Some(DAN), &uri(), &p, &home, &plain, &OK));
+        // Nor one keeping a community of the same key at another app.
+        let elsewhere = BTreeMap::from([
+            ("app".to_string(), t("did:web:other.example#umbrae_app")),
+            ("key".to_string(), t("art")),
+        ]);
+        let mut a = BTreeMap::from([("$type".to_string(), t(AUDIENCE_COMMUNITY))]);
+        a.insert("community".into(), Value::Map(elsewhere));
+        let other = parse(&record(vec![Value::Map(a)]));
+        assert!(!can_view_profile(
+            Some(CAROL),
+            &uri(),
+            &other,
+            &home,
+            &members(true),
+            &OK
+        ));
 
         let everyone = parse(&record(vec![audience(AUDIENCE_EVERYONE, None)]));
         let src = Source {
             states: vec![],
             admitted: vec![BOB],
+            communities: vec![],
         };
         assert!(can_view_profile(
             Some(BOB),
@@ -333,6 +432,7 @@ mod tests {
         let src = Source {
             states: vec![followers],
             admitted: vec![DAN],
+            communities: vec![],
         };
         assert!(can_view_profile(
             Some(ALICE),
@@ -359,6 +459,7 @@ mod tests {
         let src = Source {
             states: vec![],
             admitted: vec![BOB],
+            communities: vec![],
         };
         assert!(!can_view_profile(Some(BOB), &uri(), &p, &leaky, &src, &OK));
         assert!(!can_view_profile(
@@ -378,6 +479,7 @@ mod tests {
         let src = Source {
             states: vec![],
             admitted: vec![BOB],
+            communities: vec![],
         };
         let member = |public_read, publish_members| {
             Policy::Member(MemberPolicy {
@@ -414,16 +516,17 @@ mod tests {
         let mut missing = record(vec![]);
         missing.remove("audiences");
         assert!(at(&missing).is_err());
-        // Someone else's group, a non-community space, a duplicate.
+        // Someone else's group; a community audience naming a space, as in
+        // 0.7, or a malformed ref; a duplicate.
         let bobs = group_space(BOB, GROUP).unwrap();
         assert!(at(&record(vec![audience(AUDIENCE_GROUP, Some(&bobs))])).is_err());
         let fake = group_space(ALICE, GROUP).unwrap();
         assert!(at(&record(vec![audience(AUDIENCE_COMMUNITY, Some(&fake))])).is_err());
-        assert!(at(&record(vec![
-            audience(AUDIENCE_FOLLOWERS, None),
-            audience(AUDIENCE_FOLLOWERS, None)
-        ]))
-        .is_err());
+        assert!(at(&record(vec![community("Art")])).is_err());
+        for dup in [audience(AUDIENCE_FOLLOWERS, None), community("art")] {
+            assert!(at(&record(vec![dup.clone(), dup])).is_err());
+        }
+        assert!(at(&record(vec![community("art"), community("music")])).is_ok());
         // Unknown types are dropped: they grant nothing.
         let p = parse(&record(vec![audience(
             "tools.umbrae.profile#futureAudience",

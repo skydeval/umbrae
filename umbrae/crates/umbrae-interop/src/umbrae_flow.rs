@@ -120,6 +120,20 @@ pub(crate) fn sync(
         .as_str()
         .unwrap_or_default()
         .to_owned();
+    read_space(pds, dir, space, credential, key, None)
+}
+
+/// Read a space with a credential bound to `key`: the writer set, and the
+/// repo of every writer, or only of `only` when given.
+pub(crate) fn read_space(
+    pds: &Pds,
+    dir: &crate::plc::Directory,
+    space: &SpaceRef,
+    credential: String,
+    key: SigningKey,
+    only: Option<&str>,
+) -> Result<Synced, String> {
+    let space_str = space.to_string();
     let authority = space.authority();
     let w = pds
         .get(
@@ -141,7 +155,10 @@ pub(crate) fn sync(
         .unwrap_or_default();
     writers.sort();
     let mut repos = BTreeMap::new();
-    for did in &writers {
+    for did in writers
+        .iter()
+        .filter(|d| only.is_none_or(|o| o == d.as_str()))
+    {
         let author_kem = dir
             .key(did, "atproto_kem")
             .ok_or_else(|| format!("no #atproto_kem for {did}"))?;
@@ -173,7 +190,7 @@ pub(crate) fn sync(
     })
 }
 
-fn state_of(space: &SpaceRef, s: &Synced) -> SpaceState {
+pub(crate) fn state_of(space: &SpaceRef, s: &Synced) -> SpaceState {
     let empty = Vec::new();
     let records = s.repos.get(space.authority()).unwrap_or(&empty);
     SpaceState::from_authority_records(
@@ -278,8 +295,9 @@ pub(crate) fn run(
         .unwrap_or_default()
         .to_owned();
     let parent = json!({ "uri": post_uri.to_string(), "cid": post_cid });
-    let reply_into = reply_space(&Target::Hidden(post_uri.clone()));
-    let like_into = like_space(&post_uri);
+    let reply_into =
+        reply_space(&bob.did, &Target::Hidden(post_uri.clone())).map_err(|e| e.to_string())?;
+    let like_into = like_space(&bob.did, &post_uri).map_err(|e| e.to_string())?;
     report.check(
         "umbrae: a reply and a like go into the parent's space",
         if reply_into.as_ref() == Some(&space) && like_into == space {
@@ -312,8 +330,9 @@ pub(crate) fn run(
             &who.auth(),
         )
     };
-    let repost_into = repost_space(&post_uri);
-    let quote_into = quote_space(&Target::Hidden(post_uri.clone()))
+    let repost_into = repost_space(&bob.did, &post_uri).map_err(|e| e.to_string())?;
+    let quote_into = quote_space(&bob.did, &Target::Hidden(post_uri.clone()))
+        .map_err(|e| e.to_string())?
         .ok_or("quote_space gave no space for a hidden quote")?;
     let repost = json!({ "$type": REPOST, "subject": parent, "createdAt": CREATED });
     let quote = json!({ "$type": POST, "text": "this", "createdAt": CREATED,
@@ -449,8 +468,8 @@ pub(crate) fn run(
         !can_view_record(a, &carol_uri, &state, &ctx),
         can_write(&bob.did, &state, &ctx),
         !can_write(&carol.did, &state, &ctx),
-        can_view_repost(a, &repost_uri, &post_uri, &state, &ctx),
-        !can_view_repost(c, &repost_uri, &post_uri, &state, &ctx),
+        can_view_repost(a, &repost_uri, &state, &post_uri, &state, &ctx),
+        !can_view_repost(c, &repost_uri, &state, &post_uri, &state, &ctx),
         can_view_record(a, &quote_uri, &state, &ctx),
     ];
     report.check(
@@ -508,7 +527,7 @@ pub(crate) fn run(
         if state.members.get(&bob.did).is_none()
             && !can_view_space(b, &state, &ctx)
             && !can_view_record(a, &reply_uri, &state, &ctx)
-            && !can_view_repost(a, &repost_uri, &post_uri, &state, &ctx)
+            && !can_view_repost(a, &repost_uri, &state, &post_uri, &state, &ctx)
             && !can_view_record(a, &quote_uri, &state, &ctx)
             && can_view_record(a, &post_uri, &state, &ctx)
         {

@@ -22,7 +22,7 @@ Umbrae isn't a server. It's lexicons, rules and protocol code that clients, PDSe
 - **Bookmarks** of hidden posts, kept in only-me.
 - **Private labelers:** labels readable only by admitted accounts, labels on hidden posts and accounts, and labels restricted to a permitted list.
 - **Private accounts:** an approved-followers audience, a hidden profile, hidden follows, and reply and quote gates.
-- **Communities:** a community's own managed space, with membership held by its managing app (a serving app, or a PDS that manages its own communities), author-driven feeds, one profile shown to the audiences it lists, and shareable lists with subscriptions.
+- **Communities:** a membership kept by a managing app (a serving app, or a PDS that manages its own communities), with no account of its own. Each writer posts in their own space for it, the app is its only reader, and posts that leave show as placeholders. Also author-driven feeds, one profile shown to the audiences it lists, and shareable lists with subscriptions.
 - **Hidden lists:** block, mute and curate lists, personal (in only-me) or shared (subscribers can't see each other). Also exemptions from labels, labelers and lists.
 
 The design is documented in [`docs/design/`](docs/design/README.md).

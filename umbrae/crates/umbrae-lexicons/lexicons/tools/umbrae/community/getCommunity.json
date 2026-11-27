@@ -4,17 +4,18 @@
   "defs": {
     "main": {
       "type": "query",
-      "description": "A community's details and the caller's standing in it. Served by the managing app named in the community space's policy, at its #umbrae_app endpoint, with atproto service auth (iss the caller, aud the managing app, lxm this method); clients call through their PDS with atproto-proxy set to the policy's managingApp. Any managing app may serve it: a serving app, or a PDS that manages its own communities.",
+      "description": "A community's details and the caller's standing in it. Served by the community's managing app, at the service its ref's app names, with atproto service auth (iss the caller, aud the app, lxm this method); clients call through their PDS with atproto-proxy set to the ref's app. Any managing app may serve it: a serving app, or a PDS that manages its own communities. An unlisted community answers CommunityNotFound to anyone who isn't a member.",
       "parameters": {
         "type": "params",
         "required": [
-          "community"
+          "key"
         ],
         "properties": {
-          "community": {
+          "key": {
             "type": "string",
-            "format": "did",
-            "description": "The community account's DID."
+            "minLength": 1,
+            "maxLength": 63,
+            "description": "The community's key within this app."
           }
         }
       },
@@ -23,37 +24,23 @@
         "schema": {
           "type": "object",
           "required": [
-            "did",
-            "space",
-            "handle",
+            "community",
             "name",
-            "managingApp",
             "joinMode",
+            "listed",
+            "appClientId",
             "viewer"
           ],
           "properties": {
-            "did": {
-              "type": "string",
-              "format": "did"
-            },
-            "space": {
-              "type": "string",
-              "format": "space-ref",
-              "description": "The community space: at:space/{did}/tools.umbrae.space/community."
-            },
-            "handle": {
-              "type": "string",
-              "format": "handle"
+            "community": {
+              "type": "ref",
+              "ref": "tools.umbrae.community.defs#communityRef"
             },
             "name": {
               "type": "string"
             },
             "description": {
               "type": "string"
-            },
-            "managingApp": {
-              "type": "string",
-              "description": "The did#serviceId the space policy names."
             },
             "joinMode": {
               "type": "string",
@@ -62,6 +49,20 @@
                 "request",
                 "invite"
               ]
+            },
+            "listed": {
+              "type": "boolean",
+              "description": "Whether the app shows the community to anyone it admits. An unlisted one is shown only to members."
+            },
+            "labeler": {
+              "type": "string",
+              "format": "did",
+              "description": "The community's hidden labeler: a tools.umbrae.labeler space at self whose managed policy names this app. The app applies its labels to the community's posts."
+            },
+            "appClientId": {
+              "type": "string",
+              "format": "uri",
+              "description": "The app's OAuth client ID: the URL of its client metadata, which publishes a JWKS. The app syncs members' community spaces with an attestation for this client, and a profile space limited by allowedApps must list it before the owner calls registerProfile."
             },
             "viewer": {
               "type": "ref",
@@ -73,7 +74,7 @@
       "errors": [
         {
           "name": "CommunityNotFound",
-          "description": "Not a community this managing app manages."
+          "description": "Not a community this managing app manages, or an unlisted one and the caller isn't a member."
         },
         {
           "name": "NotAllowed",
@@ -88,7 +89,8 @@
     "viewerState": {
       "type": "object",
       "required": [
-        "state"
+        "state",
+        "moderator"
       ],
       "properties": {
         "state": {
@@ -104,9 +106,13 @@
         "role": {
           "type": "string",
           "knownValues": [
-            "member",
-            "moderator"
-          ]
+            "reader",
+            "writer"
+          ],
+          "description": "A member's role: readers only read; writers also post, reply, like and repost."
+        },
+        "moderator": {
+          "type": "boolean"
         }
       }
     }

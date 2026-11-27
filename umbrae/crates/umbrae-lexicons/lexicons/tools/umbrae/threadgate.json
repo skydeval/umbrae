@@ -40,7 +40,7 @@
               "type": "string",
               "format": "at-uri"
             },
-            "description": "Replies, in this space, hidden for everyone but their authors."
+            "description": "Replies, in this space, hidden for everyone but their authors. In a community, replies in any space of the same type and key."
           },
           "createdAt": {
             "type": "string",

@@ -3,19 +3,24 @@
 //! - `tools.umbrae.profile`: one record, at `self` in the owner's profile
 //!   space (key `profile`), listing its `audiences`. The serving app shows
 //!   it to anyone in a listed audience. Copies elsewhere (one per audience,
-//!   as in 0.7.x) are legacy: still read, until the owner saves again.
+//!   as in 0.7.x, by the owner) are legacy: still read, until the owner
+//!   saves again.
 //! - `tools.umbrae.follow`: a DID, in the follower's own only-me space.
 //! - `tools.umbrae.threadgate` and `tools.umbrae.postgate`: by a post's
 //!   author, in the post's space, at the post's record key. They name
 //!   hidden records only in `post`, `hiddenReplies` and
-//!   `detachedEmbeddingUris`, and only posts in their own space.
+//!   `detachedEmbeddingUris`, and only posts in their own space, or in a
+//!   community, in any member's space for it.
 //!
 //! Gates are enforced where posts are shown, as on Bluesky: each member
 //! writes into their own repo, so nothing stops a reply being written.
 
+use crate::community::{community_ref, CommunityRef};
 use crate::labeler::{blob, BlobRef};
-use crate::validate::{bounded, datetime, is_datetime, mentions_space_uri, string, Invalid};
-use crate::{COMMUNITY_SKEY, POST, PROFILE_SKEY, SELF_RKEY, SPACE_TYPE};
+use crate::validate::{
+    bounded, datetime, in_reach, is_datetime, mentions_space_uri, string, Invalid,
+};
+use crate::{POST, PROFILE_SKEY, SELF_RKEY, SPACE_TYPE};
 use std::collections::BTreeMap;
 use umbrae_core::drisl::Value;
 use umbrae_core::uri::{is_space_uri, is_valid_did, is_valid_tid, SpaceRecordUri, SpaceRef};
@@ -92,9 +97,10 @@ pub enum Audience {
     Followers,
     /// Members of one of the owner's own groups.
     Group(SpaceRef),
-    /// Members of a community the owner belongs to, while the owner is
-    /// still a member.
-    Community(SpaceRef),
+    /// Members of a community the owner belongs to, readers and writers,
+    /// while the owner is still a member. Only the community's own app
+    /// serves it.
+    Community(CommunityRef),
     /// Anyone the serving app admits.
     Everyone,
 }
@@ -167,9 +173,8 @@ pub(crate) fn profile(m: &Map, uri: &SpaceRecordUri) -> Result<Profile, Invalid>
         Some(audiences(m.get("audiences"), space.authority())?)
     } else {
         // A legacy copy: the owner's followers space, a group, or its
-        // everyone space, by the authority; or a member's own copy in a
-        // community space.
-        if !(space.skey() == COMMUNITY_SKEY || uri.author() == space.authority()) {
+        // everyone space, by the authority.
+        if uri.author() != space.authority() {
             return Err(Invalid(
                 "a hidden profile is its owner's, at self, in an audience space it writes to",
             ));
@@ -248,13 +253,7 @@ fn audiences(v: Option<&Value>, owner: &str) -> Result<Vec<Audience>, Invalid> {
                 }
                 Audience::Group(s)
             }
-            Some(AUDIENCE_COMMUNITY) => {
-                let s = space()?;
-                if s.skey() != COMMUNITY_SKEY {
-                    return Err(Invalid("a community audience names a community space"));
-                }
-                Audience::Community(s)
-            }
+            Some(AUDIENCE_COMMUNITY) => Audience::Community(community_ref(a.get("community"))?),
             Some(_) => continue,
             None => return Err(Invalid("an audience must have a $type")),
         };
@@ -418,7 +417,8 @@ fn gated_post(m: &Map, uri: &SpaceRecordUri) -> Result<SpaceRecordUri, Invalid> 
     }
 }
 
-/// An optional array of URIs of posts in `space`.
+/// An optional array of URIs of posts in `space`, or in a community space,
+/// in any member's space for that community.
 fn posts_here(
     v: Option<&Value>,
     space: &SpaceRef,
@@ -432,7 +432,7 @@ fn posts_here(
     a.iter()
         .map(|v| match v {
             Value::Text(s) if is_space_uri(s) => match SpaceRecordUri::parse(s) {
-                Ok(u) if u.space() == space && u.collection() == POST => Ok(u),
+                Ok(u) if in_reach(space, u.space()) && u.collection() == POST => Ok(u),
                 _ => Err(Invalid("a gated post must be in the same space")),
             },
             _ => Err(Invalid("a gated post must be in the same space")),
@@ -517,6 +517,71 @@ mod tests {
         Value::Map(map(&[("$type", t(ty))]))
     }
 
+    fn community_of(key: &str) -> String {
+        crate::community_skey(
+            &crate::CommunityRef::new("did:web:app.example#umbrae_app", key).unwrap(),
+        )
+    }
+
+    fn community() -> String {
+        community_of("art")
+    }
+
+    #[test]
+    fn gates_in_a_community_name_other_members_spaces() {
+        let art = community();
+        // Bob gates his post in his own space; the replies and quotes it
+        // names are in Alice's.
+        let bobs = SpaceRef::new(BOB, SPACE_TYPE, &art).unwrap();
+        let post = bobs.record(BOB, POST, RKEY).unwrap().to_string();
+        let alices = at(&art, ALICE, POST, "3mbaaaaaaaaa3").to_string();
+        let gate = |collection: &str, field: &str, uri: &str| {
+            map(&[
+                ("$type", t(collection)),
+                ("post", t(&post)),
+                (field, arr(&[uri.to_owned()])),
+                ("createdAt", t(NOW)),
+            ])
+        };
+        let tg = bobs.record(BOB, THREADGATE, RKEY).unwrap();
+        let pg = bobs.record(BOB, POSTGATE, RKEY).unwrap();
+        assert!(matches!(
+            validate_record(&tg, &gate(THREADGATE, "hiddenReplies", &alices)),
+            Ok(Some(Record::Threadgate(g))) if g.hidden_replies.len() == 1
+        ));
+        assert!(matches!(
+            validate_record(&pg, &gate(POSTGATE, "detachedEmbeddingUris", &alices)),
+            Ok(Some(Record::Postgate(g))) if g.detached_embedding_uris.len() == 1
+        ));
+        // Not another community's, and not a group's.
+        for other in [
+            at(&community_of("music"), ALICE, POST, "3mbaaaaaaaaa3").to_string(),
+            at(GROUP, ALICE, POST, "3mbaaaaaaaaa3").to_string(),
+        ] {
+            assert!(validate_record(&tg, &gate(THREADGATE, "hiddenReplies", &other)).is_err());
+            assert!(
+                validate_record(&pg, &gate(POSTGATE, "detachedEmbeddingUris", &other)).is_err()
+            );
+        }
+        // Outside communities the same-space rule stands, even for a space
+        // of the same key in another repo.
+        let bobs_group = SpaceRef::new(BOB, SPACE_TYPE, GROUP).unwrap();
+        let mut in_group = gate(
+            THREADGATE,
+            "hiddenReplies",
+            &at(GROUP, ALICE, POST, "3mbaaaaaaaaa3").to_string(),
+        );
+        in_group.insert(
+            "post".into(),
+            t(&bobs_group.record(BOB, POST, RKEY).unwrap().to_string()),
+        );
+        assert!(validate_record(
+            &bobs_group.record(BOB, THREADGATE, RKEY).unwrap(),
+            &in_group
+        )
+        .is_err());
+    }
+
     #[test]
     fn hidden_profile_only_in_the_followers_space() {
         let avatar = Value::Map(map(&[
@@ -537,18 +602,18 @@ mod tests {
             validate_record(&at(FOLLOWERS_SKEY, ALICE, PROFILE, "self"), &p),
             Ok(Some(Record::Profile(pr))) if pr.avatar.is_some()
         ));
-        // One copy per audience: followers, a group, everyone, and a
-        // member's own copy in a community.
+        // One copy per audience: followers, a group, everyone.
         for uri in [
             at(GROUP, ALICE, PROFILE, "self"),
             at(EVERYONE_SKEY, ALICE, PROFILE, "self"),
-            at(COMMUNITY_SKEY, BOB, PROFILE, "self"),
         ] {
             assert!(validate_record(&uri, &p).is_ok(), "{uri}");
         }
-        // Not in only-me, not someone else's elsewhere, not at a TID.
+        // Not in only-me, not someone else's elsewhere (a member's copy in
+        // a community space included), not at a TID.
         for uri in [
             at("self", ALICE, PROFILE, "self"),
+            at(&community(), BOB, PROFILE, "self"),
             at(GROUP, BOB, PROFILE, "self"),
             at(EVERYONE_SKEY, BOB, PROFILE, "self"),
             at(FOLLOWERS_SKEY, BOB, PROFILE, "self"),

@@ -1,0 +1,32 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.community.defs",
+  "defs": {
+    "communityRef": {
+      "type": "object",
+      "description": "A community: a membership kept by a managing app. It has no account, repo or record of its own. Two refs name the same community only when app and key are both equal, byte for byte. Each writer's records for it live in their own tools.umbrae.space space, whose key is derived from the ref: c- followed by the first 32 characters of base32lower-nopad(sha256(\"tools.umbrae.community\\n\" + app + \"\\n\" + key)).",
+      "required": [
+        "app",
+        "key"
+      ],
+      "properties": {
+        "app": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "The managing app's service ref, did#serviceId: where tools.umbrae.community.* is served, the atproto-proxy value for calling it, and the managingApp of every member's community space."
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 63,
+          "description": "The community's key within its app: lowercase letters, digits and hyphens, starting with a letter or digit."
+        }
+      }
+    },
+    "unavailablePost": {
+      "type": "object",
+      "description": "Shown in place of a post the viewer can't see, as a reply's parent, root or ancestor, or as a quoted post: deleted, by an account no longer a writer, in a space that fails the community's policy check, or not held by the app. It has no author, text or reason, so a removal looks like a deletion. A block notice is never replaced by one.",
+      "properties": {}
+    }
+  }
+}

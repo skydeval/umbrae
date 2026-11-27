@@ -1,0 +1,73 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.community.listMyCommunities",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "The communities this app keeps that the caller is a member of, with the caller's role in each. A reader maps a community space's key back to its ref by computing the key for each of these. Served by the managing app, at its service, with atproto service auth (iss the caller, aud the app, lxm this method); clients call through their PDS with atproto-proxy set to the app.",
+      "parameters": {
+        "type": "params",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "communities"
+          ],
+          "properties": {
+            "communities": {
+              "type": "array",
+              "items": {
+                "type": "ref",
+                "ref": "#membership"
+              }
+            },
+            "cursor": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "NotAdmitted",
+          "description": "The managing app doesn't admit this account."
+        }
+      ]
+    },
+    "membership": {
+      "type": "object",
+      "required": [
+        "community",
+        "name",
+        "role",
+        "moderator"
+      ],
+      "properties": {
+        "community": {
+          "type": "ref",
+          "ref": "tools.umbrae.community.defs#communityRef"
+        },
+        "name": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "knownValues": [
+            "reader",
+            "writer"
+          ]
+        },
+        "moderator": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

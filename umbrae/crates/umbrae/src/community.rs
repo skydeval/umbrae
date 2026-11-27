@@ -1,13 +1,16 @@
-//! Communities, feeds, scoped profiles and list subscriptions.
+//! Communities, feeds, placeholders, scoped profiles and list subscriptions.
 //!
-//! - **A community** is a managed `tools.umbrae.space` space with the key
-//!   `community`, whose authority is the community's own account. Its
-//!   managing app (prism, or a PDS such as Aurora-Locus that manages its own
-//!   communities) answers who may read and write. A removed member stops
-//!   being a writer, so their posts drop out of the community, as in a
-//!   group.
-//! - **A feed** shows the posts that name it, from accounts on its current
-//!   author list, to anyone who may see the community.
+//! - **A community** is a membership kept by a managing app (prism, or a PDS
+//!   such as Aurora-Locus that manages its own communities), named by a
+//!   [`CommunityRef`]. Each writer keeps their records in their own
+//!   community space ([`crate::space::community_space`]); the app is the
+//!   only reader, and it assembles the community from those spaces. A
+//!   member who is removed, demoted to reader or leaves stops being a
+//!   writer, so their posts drop out at the app's next request.
+//! - **A feed** shows the posts that name it, from any member's space for
+//!   the same community, by accounts on its current author list.
+//! - **A placeholder** stands in for a referenced post the viewer can't
+//!   see ([`referenced_post`]), so a thread keeps its shape.
 //! - **Legacy profile copies** (0.7.0 to 0.7.2 wrote one per audience): a
 //!   viewer sees the copy for the narrowest audience they're in. Read them
 //!   only until the owner has, or has deleted, a profile space; see
@@ -15,37 +18,106 @@
 //! - **A list subscription** shows only to its owner, and only while they
 //!   may still see the list.
 
-use crate::access::{can_view_record, SpaceState, ViewContext};
-use crate::space::is_only_me;
+use crate::access::{can_view_record, in_same_community, SpaceState, Tri, ViewContext};
+use crate::space::{is_community_space, is_only_me};
 use umbrae_core::uri::{is_valid_tid, SpaceRecordUri};
+pub use umbrae_lexicons::CommunityRef;
 use umbrae_lexicons::{
-    Feed, ListSubscription, Post, Profile, Target, COMMUNITY_SKEY, EVERYONE_SKEY, FEED,
-    FOLLOWERS_SKEY, POST,
+    Feed, ListSubscription, Post, Profile, Target, EVERYONE_SKEY, FEED, FOLLOWERS_SKEY, POST,
 };
 
-/// Whether `viewer` may see `post` in `feed`: both are in the same
-/// community space, the viewer may see both, the post names the feed, and
-/// its author is on the feed's current author list.
+/// A member's role in a community, as its app keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// Reads the community, through its app.
+    Reader,
+    /// Also posts, replies, likes and reposts, in their own space.
+    Writer,
+}
+
+/// Whether `viewer` may see `post` in `feed`. Both are in spaces of one
+/// community ([`in_same_community`], so a lookalike fails), the viewer may
+/// see both, the post names the feed, and its author is on the feed's
+/// current author list.
+#[allow(clippy::too_many_arguments)]
 pub fn can_view_feed_post(
     viewer: Option<&str>,
     post_uri: &SpaceRecordUri,
     post: &Post,
+    post_space: &SpaceState,
     feed_uri: &SpaceRecordUri,
     feed: &Feed,
-    state: &SpaceState,
+    feed_space: &SpaceState,
     ctx: &impl ViewContext,
 ) -> bool {
-    post_uri.space().skey() == COMMUNITY_SKEY
+    is_community_space(post_uri.space())
         && post_uri.collection() == POST
         && feed_uri.collection() == FEED
-        && post_uri.space() == feed_uri.space()
+        && in_same_community(post_space, feed_space)
         && post
             .feeds
             .iter()
             .any(|f| matches!(&f.target, Target::Hidden(u) if u == feed_uri))
         && feed.authors.iter().any(|a| a == post_uri.author())
-        && can_view_record(viewer, feed_uri, state, ctx)
-        && can_view_record(viewer, post_uri, state, ctx)
+        && can_view_record(viewer, feed_uri, feed_space, ctx)
+        && can_view_record(viewer, post_uri, post_space, ctx)
+}
+
+/// What a thread view shows for a post it refers to: a reply's parent,
+/// root or ancestor, or a quoted post.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferencedPost {
+    /// The post itself.
+    Visible,
+    /// The usual block notice: a block between the viewer and the post's
+    /// author or authority is the only thing hiding it.
+    Blocked,
+    /// `tools.umbrae.community.defs#unavailablePost`, with no author, text
+    /// or reason: deleted, its author no longer a writer, its space failing
+    /// the policy check, or not held. A removal looks like a deletion.
+    Unavailable,
+}
+
+/// Decide what `viewer` sees in place of the post at `uri`, whose space
+/// state is `space` (`None` when the app doesn't hold it, or the post is
+/// deleted). The referring reply's own visibility doesn't depend on this.
+/// For an unavailable post, the app doesn't pass on the raw reference
+/// either: the URI names its author.
+pub fn referenced_post(
+    viewer: Option<&str>,
+    uri: &SpaceRecordUri,
+    space: Option<&SpaceState>,
+    ctx: &impl ViewContext,
+) -> ReferencedPost {
+    let Some(space) = space else {
+        return ReferencedPost::Unavailable;
+    };
+    if uri.collection() != POST {
+        return ReferencedPost::Unavailable;
+    }
+    if can_view_record(viewer, uri, space, ctx) {
+        return ReferencedPost::Visible;
+    }
+    let blocks = |did: &str| viewer.is_some_and(|v| v != did && ctx.blocked(v, did) == Tri::Yes);
+    let blocked = blocks(uri.author()) || blocks(space.space.authority());
+    if blocked && can_view_record(viewer, uri, space, &Unblocked(ctx)) {
+        ReferencedPost::Blocked
+    } else {
+        ReferencedPost::Unavailable
+    }
+}
+
+/// `ctx`, with every block lifted: to tell a block from everything else.
+struct Unblocked<'a, C>(&'a C);
+
+impl<C: ViewContext> ViewContext for Unblocked<'_, C> {
+    fn is_active(&self, did: &str) -> Tri {
+        self.0.is_active(did)
+    }
+
+    fn blocked(&self, _: &str, _: &str) -> Tri {
+        Tri::No
+    }
 }
 
 /// How narrow a profile copy's audience is: lower is narrower. `None` for
@@ -54,8 +126,7 @@ fn audience_rank(uri: &SpaceRecordUri) -> Option<u8> {
     match uri.space().skey() {
         k if is_valid_tid(k) => Some(0),
         FOLLOWERS_SKEY => Some(1),
-        COMMUNITY_SKEY => Some(2),
-        EVERYONE_SKEY => Some(3),
+        EVERYONE_SKEY => Some(2),
         _ => None,
     }
 }
@@ -120,9 +191,9 @@ pub fn can_view_list_subscription(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::access::{Members, Tri};
+    use crate::access::Members;
     use crate::space::{
-        check_policy, community_space, everyone_space, followers_space, group_policy, group_space,
+        community_space, everyone_space, followers_space, group_policy, group_space,
         managed_policy, only_me_policy, only_me_space,
     };
     use std::collections::BTreeMap;
@@ -132,7 +203,6 @@ mod tests {
     use umbrae_core::uri::SpaceRef;
     use umbrae_lexicons::{validate_record, Record, LIST, LIST_SUBSCRIPTION, PROFILE};
 
-    const COMMUNITY: &str = "did:plc:communityccccccccccccccc";
     const ALICE: &str = "did:plc:aliceaaaaaaaaaaaaaaaaaaa";
     const BOB: &str = "did:plc:bobbbbbbbbbbbbbbbbbbbbbb";
     const CAROL: &str = "did:plc:carolcccccccccccccccccccc";
@@ -141,15 +211,24 @@ mod tests {
     const RKEY: &str = "3mbaaaaaaaaa2";
     const RKEY2: &str = "3mbaaaaaaaaa3";
 
-    struct Ctx;
+    struct Ctx(Vec<(&'static str, &'static str)>);
     impl ViewContext for Ctx {
         fn is_active(&self, _: &str) -> Tri {
             Tri::Yes
         }
-        fn blocked(&self, _: &str, _: &str) -> Tri {
-            Tri::No
+        fn blocked(&self, a: &str, b: &str) -> Tri {
+            if self
+                .0
+                .iter()
+                .any(|&(x, y)| (x, y) == (a, b) || (x, y) == (b, a))
+            {
+                Tri::Yes
+            } else {
+                Tri::No
+            }
         }
     }
+    const OK: Ctx = Ctx(Vec::new());
 
     fn t(s: &str) -> Value {
         Value::Text(s.into())
@@ -173,13 +252,18 @@ mod tests {
         MemberAccess { read, write }
     }
 
-    /// A community whose managing app says Alice and Bob are members, and
-    /// Carol isn't.
-    fn community() -> SpaceState {
+    fn art() -> CommunityRef {
+        CommunityRef::new(APP, "art").unwrap()
+    }
+
+    /// `author`'s art space, as the app holds it: Alice and Bob are
+    /// writers, Carol isn't a member.
+    fn space_of(author: &str) -> SpaceState {
         let mut s = SpaceState::new(
-            community_space(COMMUNITY).unwrap(),
+            community_space(author, &art()).unwrap(),
             Some(managed_policy(APP)),
         );
+        s.community = Some(art());
         let mut m = Members::default();
         m.insert(ALICE, rw(true, true));
         m.insert(BOB, rw(true, true));
@@ -187,36 +271,10 @@ mod tests {
         s
     }
 
-    #[test]
-    fn managed_spaces_check_and_use_the_apps_answers() {
-        let c = community();
-        assert_eq!(check_policy(&c.space, c.policy.as_ref().unwrap()), Ok(()));
-        let e = everyone_space(ALICE).unwrap();
-        assert_eq!(check_policy(&e, &managed_policy(APP)), Ok(()));
-        // A community or everyone space must be managed, and published.
-        assert!(check_policy(&c.space, &group_policy(None)).is_err());
-        assert!(check_policy(&e, &only_me_policy()).is_err());
-        let unpublished = Policy::Managed(umbrae_core::policy::ManagedPolicy {
-            managing_app: APP.into(),
-            publish_policy: false,
-        });
-        assert!(check_policy(&c.space, &unpublished).is_err());
-        // And a group can't be managed.
-        let g = group_space(ALICE, GROUP).unwrap();
-        assert!(check_policy(&g, &managed_policy(APP)).is_err());
-        let post = c.space.record(BOB, POST, RKEY).unwrap();
-        assert!(can_view_record(Some(ALICE), &post, &c, &Ctx));
-        assert!(!can_view_record(Some(CAROL), &post, &c, &Ctx));
-        // Removed: Bob's posts drop out of the community.
-        let mut removed = community();
-        removed.members.insert(BOB, rw(false, false));
-        assert!(!can_view_record(Some(ALICE), &post, &removed, &Ctx));
-    }
-
-    fn post_in(feeds: &[&SpaceRecordUri], author: &str) -> (SpaceRecordUri, Post) {
-        let uri = community_space(COMMUNITY)
-            .unwrap()
-            .record(author, POST, RKEY2)
+    fn post_in(space: &SpaceState, feeds: &[&SpaceRecordUri]) -> (SpaceRecordUri, Post) {
+        let uri = space
+            .space
+            .record(space.space.authority(), POST, RKEY2)
             .unwrap();
         let v = map(&[
             ("$type", t(POST)),
@@ -233,10 +291,10 @@ mod tests {
         }
     }
 
-    fn a_feed(authors: &[&str]) -> (SpaceRecordUri, Feed) {
-        let uri = community_space(COMMUNITY)
-            .unwrap()
-            .record(ALICE, FEED, RKEY)
+    fn a_feed(space: &SpaceState, authors: &[&str]) -> (SpaceRecordUri, Feed) {
+        let uri = space
+            .space
+            .record(space.space.authority(), FEED, RKEY)
             .unwrap();
         let v = map(&[
             ("$type", t(FEED)),
@@ -254,50 +312,100 @@ mod tests {
     }
 
     #[test]
-    fn feeds_show_their_current_authors_posts_to_the_community() {
-        let c = community();
-        let (feed_uri, feed) = a_feed(&[BOB]);
-        let (post_uri, post) = post_in(&[&feed_uri], BOB);
-        assert!(can_view_feed_post(
-            Some(ALICE),
-            &post_uri,
-            &post,
-            &feed_uri,
-            &feed,
-            &c,
-            &Ctx
-        ));
-        assert!(!can_view_feed_post(
-            Some(CAROL),
-            &post_uri,
-            &post,
-            &feed_uri,
-            &feed,
-            &c,
-            &Ctx
-        ));
+    fn feeds_show_their_current_authors_posts_across_members_spaces() {
+        // Alice's feed, in her space; Bob's post to it, in his.
+        let (alices, bobs) = (space_of(ALICE), space_of(BOB));
+        let (feed_uri, feed) = a_feed(&alices, &[BOB]);
+        let (post_uri, post) = post_in(&bobs, &[&feed_uri]);
+        let sees = |v: &str, feed: &Feed, feed_space: &SpaceState| {
+            can_view_feed_post(
+                Some(v),
+                &post_uri,
+                &post,
+                &bobs,
+                &feed_uri,
+                feed,
+                feed_space,
+                &OK,
+            )
+        };
+        assert!(sees(ALICE, &feed, &alices));
+        assert!(!sees(CAROL, &feed, &alices));
         // Off the author list: out of the feed.
-        let (_, without_bob) = a_feed(&[ALICE]);
-        assert!(!can_view_feed_post(
-            Some(ALICE),
-            &post_uri,
-            &post,
-            &feed_uri,
-            &without_bob,
-            &c,
-            &Ctx
-        ));
+        let (_, without_bob) = a_feed(&alices, &[ALICE]);
+        assert!(!sees(ALICE, &without_bob, &alices));
         // A post that wasn't sent to it isn't in it.
-        let (other_uri, other) = post_in(&[], BOB);
+        let (other_uri, other) = post_in(&bobs, &[]);
         assert!(!can_view_feed_post(
             Some(ALICE),
             &other_uri,
             &other,
+            &bobs,
             &feed_uri,
             &feed,
-            &c,
-            &Ctx
+            &alices,
+            &OK
         ));
+        // A lookalike: the feed's space names another app.
+        let mut lookalike = space_of(ALICE);
+        lookalike.policy = Some(managed_policy("did:web:other.example#umbrae_app"));
+        assert!(!sees(ALICE, &feed, &lookalike));
+        // The feed's author removed: the feed drops out.
+        let mut removed = space_of(ALICE);
+        removed.members.insert(ALICE, rw(false, false));
+        assert!(!sees(BOB, &feed, &removed));
+    }
+
+    #[test]
+    fn placeholders_keep_the_thread_and_never_replace_a_block() {
+        let (alices, bobs) = (space_of(ALICE), space_of(BOB));
+        let alice_post = alices.space.record(ALICE, POST, RKEY).unwrap();
+        let bob_reply = bobs.space.record(BOB, POST, RKEY2).unwrap();
+        assert_eq!(
+            referenced_post(Some(BOB), &alice_post, Some(&alices), &OK),
+            ReferencedPost::Visible
+        );
+        // Alice removed: her post is unavailable; Bob's reply still shows.
+        let mut removed = space_of(ALICE);
+        removed.members.insert(ALICE, rw(false, false));
+        let bobs_now = {
+            let mut s = space_of(BOB);
+            s.members.insert(ALICE, rw(false, false));
+            s
+        };
+        assert_eq!(
+            referenced_post(Some(BOB), &alice_post, Some(&removed), &OK),
+            ReferencedPost::Unavailable
+        );
+        assert!(can_view_record(Some(BOB), &bob_reply, &bobs_now, &OK));
+        // Deleted, or not held: the same placeholder.
+        assert_eq!(
+            referenced_post(Some(BOB), &alice_post, None, &OK),
+            ReferencedPost::Unavailable
+        );
+        // A lookalike space: unavailable.
+        let mut lookalike = space_of(ALICE);
+        lookalike.policy = Some(managed_policy("did:web:other.example#umbrae_app"));
+        assert_eq!(
+            referenced_post(Some(BOB), &alice_post, Some(&lookalike), &OK),
+            ReferencedPost::Unavailable
+        );
+        // A block is a block notice, not a placeholder...
+        let blocks = Ctx(vec![(BOB, ALICE)]);
+        assert_eq!(
+            referenced_post(Some(BOB), &alice_post, Some(&alices), &blocks),
+            ReferencedPost::Blocked
+        );
+        // ...but it doesn't uncover a post that's unavailable anyway.
+        assert_eq!(
+            referenced_post(Some(BOB), &alice_post, Some(&removed), &blocks),
+            ReferencedPost::Unavailable
+        );
+        // An outsider sees nothing.
+        assert_eq!(
+            referenced_post(Some(CAROL), &alice_post, Some(&alices), &OK),
+            ReferencedPost::Unavailable
+        );
     }
 
     fn profile_at(space: &SpaceRef, author: &str, updated: &str) -> (SpaceRecordUri, Profile) {
@@ -339,12 +447,12 @@ mod tests {
             managed_policy(APP),
             &[BOB, CAROL],
         );
-        let comm = community();
         let (gu, gp) = profile_at(&group.space, ALICE, "2026-11-26T10:00:00Z");
         let (fu, fp) = profile_at(&followers.space, ALICE, "2026-11-26T11:00:00Z");
         let (eu, ep) = profile_at(&everyone.space, ALICE, "2026-11-26T12:00:00Z");
-        let (cu, cp) = profile_at(&comm.space, ALICE, "2026-11-26T12:00:00Z");
-        let (bu, bp) = profile_at(&comm.space, BOB, "2026-11-26T12:00:00Z");
+        // A copy in a community space has no rank: never shown.
+        let comm = space_of(ALICE);
+        let (cu, cp) = profile_at(&comm.space, ALICE, "2026-11-26T13:00:00Z");
         let copies = [
             ProfileCopy {
                 uri: &eu,
@@ -366,22 +474,19 @@ mod tests {
                 profile: &gp,
                 state: &group,
             },
-            ProfileCopy {
-                uri: &bu,
-                profile: &bp,
-                state: &comm,
-            },
         ];
         // Bob is in the group: the group copy. Carol: followers. Someone in
         // none sees nothing.
-        assert_eq!(profile_for_viewer(Some(BOB), ALICE, &copies, &Ctx), Some(3));
+        assert_eq!(profile_for_viewer(Some(BOB), ALICE, &copies, &OK), Some(3));
         assert_eq!(
-            profile_for_viewer(Some(CAROL), ALICE, &copies, &Ctx),
+            profile_for_viewer(Some(CAROL), ALICE, &copies, &OK),
             Some(2)
         );
-        assert_eq!(profile_for_viewer(None, ALICE, &copies, &Ctx), None);
-        // Bob's own community copy is Bob's, never Alice's.
-        assert_eq!(profile_for_viewer(Some(ALICE), BOB, &copies, &Ctx), Some(4));
+        assert_eq!(profile_for_viewer(None, ALICE, &copies, &OK), None);
+        assert_eq!(
+            profile_for_viewer(Some(BOB), ALICE, &copies[1..2], &OK),
+            None
+        );
         // Ties go to the latest change.
         let (fu2, fp2) = profile_at(&followers.space, ALICE, "2026-11-26T09:00:00Z");
         let tie = [
@@ -396,7 +501,7 @@ mod tests {
                 state: &followers,
             },
         ];
-        assert_eq!(profile_for_viewer(Some(CAROL), ALICE, &tie, &Ctx), Some(1));
+        assert_eq!(profile_for_viewer(Some(CAROL), ALICE, &tie, &OK), Some(1));
     }
 
     #[test]
@@ -423,7 +528,7 @@ mod tests {
             &sub,
             &only_me,
             Some(&group),
-            &Ctx
+            &OK
         ));
         assert!(!can_view_list_subscription(
             Some(ALICE),
@@ -431,7 +536,7 @@ mod tests {
             &sub,
             &only_me,
             Some(&group),
-            &Ctx
+            &OK
         ));
         assert!(!can_view_list_subscription(
             Some(BOB),
@@ -439,7 +544,7 @@ mod tests {
             &sub,
             &only_me,
             None,
-            &Ctx
+            &OK
         ));
         let mut left = group.clone();
         left.members = Members::default();
@@ -449,7 +554,7 @@ mod tests {
             &sub,
             &only_me,
             Some(&left),
-            &Ctx
+            &OK
         ));
     }
 }

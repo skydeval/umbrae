@@ -23,6 +23,25 @@
 //! who may see the post). Both apply when both are set. A label on a
 //! hidden repost goes through [`can_view_repost_label`], which also needs
 //! the post it reposts.
+//!
+//! A community's labeler may use a managed labeler space instead: a
+//! `tools.umbrae.labeler` space at `self` whose managed policy names the
+//! community's app (`check_labeler_policy` accepts it; the app also checks
+//! that `managingApp` is its own). One labeler space names one app, so it
+//! serves that app's communities only. The app answers `checkAccess` for it
+//! as for a community space:
+//! - the same service-auth check: `iss` the labeler, `aud` the app, `lxm`
+//!   `checkAccess`;
+//! - the space maps by `(tools.umbrae.labeler, labeler DID)` to the
+//!   communities that name it;
+//! - nothing, ever, when `repo` names an account: members get labels
+//!   through the app, which applies [`can_view_label`] and
+//!   [`can_view_repost_label`], label audiences included;
+//! - with `repo` absent, `read` only for its own attested client ID;
+//! - no `write`: the labeler writes as authority.
+//!
+//! The labeler reads community posts through the app, never by syncing
+//! members' spaces.
 
 use crate::access::{can_view_record, can_view_repost, SpaceState, ViewContext};
 use crate::space::Misconfigured;
@@ -71,10 +90,10 @@ pub fn check_labeler_policy(space: &SpaceRef, policy: &Policy) -> Result<(), Mis
     }
     let p = match policy {
         Policy::Member(p) if space.skey() == SELF_RKEY => p,
-        // A community's labeler may leave its readers to a managing app
-        // (prism, or a PDS managing its own communities), which also sees
-        // each reader's attested app in checkAccess. It must answer read
-        // only, and write only for the labeler.
+        // A community's labeler may leave its readers to the community's
+        // app (prism, or a PDS managing its own communities), which reads
+        // it with its own attested client and answers nothing for accounts.
+        // See the module docs.
         Policy::Managed(m) if space.skey() == SELF_RKEY => {
             return match m.publish_policy {
                 true => Ok(()),
@@ -215,23 +234,26 @@ pub fn can_view_label(
 /// Whether `viewer` may see `label`, a label on a hidden repost whose
 /// `subject` is the post it reposts (from the repost record). As
 /// [`can_view_label`] for the audience, and only if they may see the
-/// repost **and** its subject ([`can_view_repost`]), in `space`, the
-/// repost's space ([`hidden_record_of`]). Without it, no. A label on
-/// anything but a hidden repost: no.
+/// repost **and** its subject ([`can_view_repost`]), given `repost_space`,
+/// the repost's space state ([`hidden_record_of`]), and `subject_space`,
+/// the subject's (in a community, another member's space). Without either,
+/// no. A label on anything but a hidden repost: no.
+#[allow(clippy::too_many_arguments)]
 pub fn can_view_repost_label(
     viewer: Option<&str>,
     label: &Label,
     subject: &SpaceRecordUri,
-    space: Option<&SpaceState>,
+    repost_space: Option<&SpaceState>,
+    subject_space: Option<&SpaceState>,
     audiences: &Audiences,
     ctx: &impl ViewContext,
 ) -> bool {
     if !audience_allows(viewer, label, audiences) {
         return false;
     }
-    match label_subject(&label.uri) {
-        Some(LabelSubject::HiddenRepost(repost)) => {
-            space.is_some_and(|s| can_view_repost(viewer, &repost, subject, s, ctx))
+    match (label_subject(&label.uri), repost_space, subject_space) {
+        (Some(LabelSubject::HiddenRepost(repost)), Some(r), Some(s)) => {
+            can_view_repost(viewer, &repost, r, subject, s, ctx)
         }
         _ => false,
     }
@@ -770,7 +792,7 @@ mod tests {
         let c = Everyone;
         let none = Audiences::default();
         let sees = |viewer: Option<&str>, s: Option<&SpaceState>, ctx: &Blocks| {
-            can_view_repost_label(viewer, &on_repost, &post, s, &none, ctx)
+            can_view_repost_label(viewer, &on_repost, &post, s, s, &none, ctx)
         };
         let open = Blocks(&[]);
 
@@ -820,6 +842,26 @@ mod tests {
             &on_repost,
             &elsewhere,
             Some(&state),
+            Some(&state),
+            &none,
+            &open
+        ));
+        assert!(!can_view_repost_label(
+            Some(DAVE),
+            &on_repost,
+            &elsewhere,
+            Some(&state),
+            Some(&other),
+            &none,
+            &open
+        ));
+        // Without the subject's state: hidden.
+        assert!(!can_view_repost_label(
+            Some(DAVE),
+            &on_repost,
+            &post,
+            Some(&state),
+            None,
             &none,
             &open
         ));
@@ -830,6 +872,7 @@ mod tests {
             Some(DAVE),
             &restricted,
             &post,
+            Some(&state),
             Some(&state),
             &none,
             &open
@@ -848,9 +891,67 @@ mod tests {
             &on_post,
             &post,
             Some(&state),
+            Some(&state),
             &none,
             &open
         ));
+    }
+
+    #[test]
+    fn labels_on_community_reposts_follow_both_members_spaces() {
+        use crate::space::{community_space, managed_policy};
+        use umbrae_lexicons::CommunityRef;
+        const APP: &str = "did:web:app.example#umbrae_app";
+        const ALICE: &str = "did:plc:aliceaaaaaaaaaaaaaaaaaaa";
+        const BOB: &str = "did:plc:bobbbbbbbbbbbbbbbbbbbbbb";
+        const CAROL: &str = "did:plc:carolcccccccccccccccccccc";
+        let art = CommunityRef::new(APP, "art").unwrap();
+        let space_of = |author: &str, app: &str| {
+            let mut s = SpaceState::new(
+                community_space(author, &art).unwrap(),
+                Some(managed_policy(app)),
+            );
+            s.community = Some(art.clone());
+            for d in [ALICE, BOB] {
+                s.members.insert(
+                    d,
+                    MemberAccess {
+                        read: true,
+                        write: true,
+                    },
+                );
+            }
+            s
+        };
+        // Alice posts in her space; Bob reposts it from his.
+        let (alices, bobs) = (space_of(ALICE, APP), space_of(BOB, APP));
+        let post = alices
+            .space
+            .record(ALICE, umbrae_lexicons::POST, "3mbaaaaaaaaa2")
+            .unwrap();
+        let repost = bobs
+            .space
+            .record(BOB, umbrae_lexicons::REPOST, "3mbaaaaaaaaa4")
+            .unwrap();
+        let on_repost = label(&repost.to_string(), "spam", "2026-11-14T08:00:00.000Z");
+        let none = Audiences::default();
+        let open = Blocks(&[]);
+        let sees = |v: &str, subject_space: &SpaceState| {
+            can_view_repost_label(
+                Some(v),
+                &on_repost,
+                &post,
+                Some(&bobs),
+                Some(subject_space),
+                &none,
+                &open,
+            )
+        };
+        assert!(sees(ALICE, &alices) && sees(BOB, &alices));
+        assert!(!sees(CAROL, &alices));
+        // A lookalike: Alice's space under the same key, naming another app.
+        let lookalike = space_of(ALICE, "did:web:other.example#umbrae_app");
+        assert!(!sees(BOB, &lookalike));
     }
 
     fn audience(id: &str, members: &[&str]) -> LabelerAudience {

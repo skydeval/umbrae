@@ -32,8 +32,14 @@ Both gates are written by a post's author, in the post's space, at the post's ow
   - An absent `allow` means everyone who can see the post may reply; an empty one means nobody may.
   - `hiddenReplies` holds up to 300 replies, hidden for everyone but their authors.
 - **`tools.umbrae.postgate`:** `detachedEmbeddingUris` lists quotes shown without the post, and `#disableRule` turns quoting off.
-- **Hidden URIs:** a gate names hidden records only as posts in its own space.
+- **Hidden URIs:** a gate names hidden records only as posts in its own space, or in a community, in any member's space for it.
 
 Gates are enforced where posts are shown. Every member writes into their own repo, so nothing can stop a reply from being written.
+
+**In a community** the community's app enforces gates, and it holds only community spaces and public data (see [Gates and reply rules](communities.md#gates-and-reply-rules)):
+- a threadgate governs replies in every member's space, and `hiddenReplies` may name them;
+- `#mentionRule` works, and `#followingRule` counts only the author's public follows;
+- `#followerRule`, `#listRule` and hidden follows need spaces the app doesn't read, so they admit nobody there, and clients don't offer them for community posts;
+- a gate keeps applying after its post stops showing, until the app syncs its deletion.
 
 Enforcing in views has a side effect: the replies that do show reveal who a rule allows. A `#followingRule` hints at the author's hidden follows. A `#followerRule` shows group members who are approved followers. A `#listRule` shows who's on the list.

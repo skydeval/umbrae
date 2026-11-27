@@ -9,6 +9,9 @@
 //! - a record embed (a quote) names a public record or a hidden post in
 //!   the quoting post's own space; nothing else in an embed points at a
 //!   hidden record;
+//! - in a community space, "its own space" widens to any space of the same
+//!   type and community key: each member writes in their own space, so a
+//!   reply, like, repost, quote or feed names records in others' spaces;
 //! - a group record is the authority's own, at rkey `self`;
 //! - a bookmark is the authority's own, in the only-me space (key `self`),
 //!   and its subject is a hidden post (in any Umbrae space). Show it only
@@ -18,7 +21,7 @@ use crate::community::{feed, list_subscription, Feed, ListSubscription, MAX_FEED
 use crate::list::{exemption, list, listitem, Exemption, List, ListItem};
 use crate::social::{follow, postgate, profile, threadgate, Follow, Postgate, Profile, Threadgate};
 use crate::{
-    BOOKMARK, COMMUNITY_SKEY, EXEMPTION, FEED, FOLLOW, GROUP, GROUP_RKEY, LIKE, LIST, LISTITEM,
+    is_community_skey, BOOKMARK, EXEMPTION, FEED, FOLLOW, GROUP, GROUP_RKEY, LIKE, LIST, LISTITEM,
     LIST_SUBSCRIPTION, POST, POSTGATE, PROFILE, REPOST, SELF_RKEY, SPACE_TYPE, THREADGATE,
 };
 use std::collections::BTreeMap;
@@ -132,10 +135,10 @@ pub struct Post {
     pub has_embed: bool,
     /// The quoted record, for `app.bsky.embed.record` and
     /// `app.bsky.embed.recordWithMedia`. A hidden one is always a post in
-    /// this post's own space.
+    /// this post's own space, or in a community, in the same community.
     pub quote: Option<StrongRef>,
     /// Community feeds it's sent to: `tools.umbrae.feed` records in this
-    /// post's own space, which is a community space. At most 3.
+    /// post's community, in any member's space. At most 3.
     pub feeds: Vec<StrongRef>,
 }
 
@@ -152,7 +155,8 @@ pub struct Group {
     pub created_at: String,
 }
 
-/// A repost of a hidden post, in that post's own space.
+/// A repost of a hidden post, in that post's own space, or in a community,
+/// in the reposter's own space for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Repost {
     pub subject: StrongRef,
@@ -327,7 +331,7 @@ fn post(m: &Map, space: &SpaceRef) -> Result<Post, Invalid> {
             let parent = strong_ref(r.get("parent"))?;
             for t in [&root.target, &parent.target] {
                 if let Target::Hidden(u) = t {
-                    if u.space() != space {
+                    if !in_reach(space, u.space()) {
                         return Err(Invalid("a hidden reply target must be in the same space"));
                     }
                 }
@@ -360,15 +364,19 @@ fn post(m: &Map, space: &SpaceRef) -> Result<Post, Invalid> {
     let feeds = match m.get("feeds") {
         None => Vec::new(),
         Some(Value::Array(a)) if a.len() <= MAX_FEEDS_PER_POST => {
-            if space.skey() != COMMUNITY_SKEY {
+            if !is_community_skey(space.skey()) {
                 return Err(Invalid("only a post in a community is sent to feeds"));
             }
             a.iter()
                 .map(|f| {
                     let r = strong_ref(Some(f))?;
                     match &r.target {
-                        Target::Hidden(u) if u.space() == space && u.collection() == FEED => Ok(r),
-                        _ => Err(Invalid("a post's feeds are feeds in its own space")),
+                        Target::Hidden(u)
+                            if in_reach(space, u.space()) && u.collection() == FEED =>
+                        {
+                            Ok(r)
+                        }
+                        _ => Err(Invalid("a post's feeds are feeds in its own community")),
                     }
                 })
                 .collect::<Result<_, _>>()?
@@ -394,7 +402,7 @@ const MEDIA: &[&str] = &[
 
 /// Check an embed and return the record it quotes, if any. The quoted
 /// strong ref's `uri` is the only place in an embed that may name a hidden
-/// record, and then only a post in `space`.
+/// record, and then only a post in `space` (or its community).
 fn embed(e: &Map, space: &SpaceRef) -> Result<Option<StrongRef>, Invalid> {
     let ty = match e.get("$type") {
         Some(Value::Text(t)) if EMBEDS.contains(&t.as_str()) => t.as_str(),
@@ -426,7 +434,7 @@ fn embed(e: &Map, space: &SpaceRef) -> Result<Option<StrongRef>, Invalid> {
     }
     if let Some(q) = &quoted {
         if let Target::Hidden(u) = &q.target {
-            if u.space() != space || u.collection() != POST {
+            if !in_reach(space, u.space()) || u.collection() != POST {
                 return Err(Invalid("a quoted hidden post must be in the same space"));
             }
         }
@@ -447,7 +455,7 @@ fn take_ref(m: &mut Map) -> Result<StrongRef, Invalid> {
 fn like(m: &Map, space: &SpaceRef) -> Result<Like, Invalid> {
     let subject = strong_ref(m.get("subject"))?;
     match &subject.target {
-        Target::Hidden(u) if u.space() == space && u.collection() == POST => {}
+        Target::Hidden(u) if in_reach(space, u.space()) && u.collection() == POST => {}
         _ => return Err(Invalid("a like's subject must be a post in the same space")),
     }
     only_subject_is_hidden(m)?;
@@ -460,7 +468,7 @@ fn like(m: &Map, space: &SpaceRef) -> Result<Like, Invalid> {
 fn repost(m: &Map, space: &SpaceRef) -> Result<Repost, Invalid> {
     let subject = strong_ref(m.get("subject"))?;
     match &subject.target {
-        Target::Hidden(u) if u.space() == space && u.collection() == POST => {}
+        Target::Hidden(u) if in_reach(space, u.space()) && u.collection() == POST => {}
         _ => {
             return Err(Invalid(
                 "a repost's subject must be a post in the same space",
@@ -507,6 +515,16 @@ fn group(m: &Map) -> Result<Group, Invalid> {
         description: string(m, "description", 0, 3000, 300)?,
         created_at: datetime(m, "createdAt")?,
     })
+}
+
+/// Whether a record in `here` may name a hidden record in `target`: the
+/// same space, or, in a community space, any space of the same type and
+/// community key (another member's space for the same community).
+pub(crate) fn in_reach(here: &SpaceRef, target: &SpaceRef) -> bool {
+    target == here
+        || (is_community_skey(here.skey())
+            && target.space_type() == here.space_type()
+            && target.skey() == here.skey())
 }
 
 pub(crate) fn strong_ref(v: Option<&Value>) -> Result<StrongRef, Invalid> {
@@ -1047,6 +1065,85 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn community_records_name_other_members_spaces() {
+        let skey = |key: &str| {
+            crate::community_skey(
+                &crate::CommunityRef::new("did:web:app.example#umbrae_app", key).unwrap(),
+            )
+        };
+        let (art, music) = (skey("art"), skey("music"));
+        // Alice's post in her space; Bob writes in his own.
+        let alices = SpaceRef::new(ALICE, SPACE_TYPE, &art)
+            .unwrap()
+            .record(ALICE, POST, RKEY)
+            .unwrap()
+            .to_string();
+        let bobs = SpaceRef::new(BOB, SPACE_TYPE, &art).unwrap();
+        let in_bobs = |collection: &str, m: &Map| {
+            validate_record(&bobs.record(BOB, collection, RKEY).unwrap(), m)
+        };
+        let reply = |target: &str| {
+            post_with(&[(
+                "reply",
+                Value::Map(map(&[("root", sref(target)), ("parent", sref(target))])),
+            )])
+        };
+        let quote = |target: &str| {
+            post_with(&[(
+                "embed",
+                Value::Map(map(&[
+                    ("$type", t("app.bsky.embed.record")),
+                    ("record", sref(target)),
+                ])),
+            )])
+        };
+        let subject = |collection: &str, target: &str| {
+            map(&[
+                ("$type", t(collection)),
+                ("subject", sref(target)),
+                ("createdAt", t(NOW)),
+            ])
+        };
+        assert!(
+            matches!(in_bobs(POST, &reply(&alices)), Ok(Some(Record::Post(p))) if p.reply.is_some())
+        );
+        assert!(
+            matches!(in_bobs(POST, &quote(&alices)), Ok(Some(Record::Post(p))) if p.quote.is_some())
+        );
+        assert!(in_bobs(LIKE, &subject(LIKE, &alices)).is_ok());
+        assert!(in_bobs(REPOST, &subject(REPOST, &alices)).is_ok());
+        // Another community's post, or a group's, is out of reach.
+        for other in [
+            SpaceRef::new(ALICE, SPACE_TYPE, &music).unwrap(),
+            space(SKEY),
+        ] {
+            let there = other.record(ALICE, POST, RKEY).unwrap().to_string();
+            assert!(in_bobs(POST, &reply(&there)).is_err(), "{there}");
+            assert!(in_bobs(POST, &quote(&there)).is_err(), "{there}");
+            assert!(in_bobs(LIKE, &subject(LIKE, &there)).is_err(), "{there}");
+            assert!(
+                in_bobs(REPOST, &subject(REPOST, &there)).is_err(),
+                "{there}"
+            );
+        }
+        // Another type under the same key is out of reach too.
+        let list_type = SpaceRef::new(ALICE, crate::LIST_SPACE_TYPE, &art)
+            .unwrap()
+            .record(ALICE, POST, RKEY)
+            .unwrap()
+            .to_string();
+        assert!(in_bobs(POST, &reply(&list_type)).is_err());
+        // Outside community spaces, the same-space rule stands: Bob's group
+        // can't name Alice's group of the same key.
+        let alices_group = space(SKEY).record(ALICE, POST, RKEY).unwrap().to_string();
+        let bobs_group = SpaceRef::new(BOB, SPACE_TYPE, SKEY).unwrap();
+        let in_bobs_group =
+            |m: &Map| validate_record(&bobs_group.record(BOB, POST, RKEY).unwrap(), m);
+        assert!(in_bobs_group(&reply(&alices_group)).is_err());
+        assert!(in_bobs_group(&quote(&alices_group)).is_err());
     }
 
     #[test]

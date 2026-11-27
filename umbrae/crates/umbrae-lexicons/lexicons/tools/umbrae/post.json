@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "A hidden post. Written only into a tools.umbrae.space space, never into a public repo. Same fields as app.bsky.feed.post. A reply to a hidden post lives in that post's space; a quote may name a public record or a hidden post in the quoting post's own space.",
+      "description": "A hidden post. Written only into a tools.umbrae.space space, never into a public repo. Same fields as app.bsky.feed.post. A reply to a hidden post lives in that post's space; a quote may name a public record or a hidden post in the quoting post's own space. In a community, each author writes in their own community space, so a reply or quote lives in the replier's space and may name a post in any space of the same type and key.",
       "key": "tid",
       "record": {
         "type": "object",
@@ -58,14 +58,14 @@
               "type": "ref",
               "ref": "com.atproto.repo.strongRef"
             },
-            "description": "Community feeds this post is sent to: tools.umbrae.feed records in this post's own space, which must be a community space."
+            "description": "Community feeds this post is sent to: tools.umbrae.feed records in a space of the same type and key as this post's, which must be a community space."
           }
         }
       }
     },
     "replyRef": {
       "type": "object",
-      "description": "A hidden parent or root must be in the same space as the reply. A public parent needs a public root.",
+      "description": "A hidden parent or root must be in the same space as the reply, or, in a community space, in any space of the same type and key. A public parent needs a public root.",
       "required": [
         "root",
         "parent"

@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-27
+
+### Changed
+- **Breaking:** a community is a membership kept by a managing app, not an account. It's named by `CommunityRef {app, key}` (`tools.umbrae.community.defs#communityRef`): the app's `did#serviceId` and a key unique within it. There's no community account, repo or declaration. The 0.7 community switches were never turned on, so nothing migrates.
+- **Breaking:** each writer keeps their community records in their own space: `community_space(author, &ref)`, a `tools.umbrae.space` keyed `community_skey(ref)` (`c-` and 32 base32 characters of a SHA-256 over the ref), with a published managed policy naming the app. Only the authority's records count there.
+- **Breaking:** the app is the only reader of community spaces. It answers `checkAccess` with nothing for any account, and with `read` only for its own attested client while the space's authority is a writer. Members read through the app, so a removal takes effect at its next request.
+- **Breaking:** `SpaceState` gains `community`, the ref the app maps a community space to. A community space shows only with it set, a policy passing `check_community_policy`, and a writer authority. `is_writer` is authority-only there.
+- **Breaking:** `reply_space`, `like_space`, `repost_space` and `quote_space` take the actor, return a `Result`, and send a reply, like, repost or quote of a community post into the actor's own space for that community.
+- **Breaking:** validation accepts, in a community space, references to any space of the same type and key: reply roots and parents, like and repost subjects, quoted posts, `Post.feeds`, threadgate `hiddenReplies` and postgate `detachedEmbeddingUris`. Elsewhere the same-space rules stand.
+- **Breaking:** `can_view_repost` and `can_view_repost_label` take the repost's and the subject's space states; `can_view_feed_post` takes the post's and the feed's. In a community, both spaces must be one community (`in_same_community`), so a lookalike naming another app fails.
+- **Breaking:** `Audience::Community` holds a `CommunityRef`, and `#communityAudience` is `{community}`. Only the community's app serves it, through `AudienceSource::community_member`, which answers `None` by default and for communities an app doesn't keep.
+- **Breaking:** `tools.umbrae.community.*` methods take `key` in place of the community DID. `getCommunity` returns the ref, `listed`, `labeler`, `appClientId` and `viewer.moderator`; roles are `reader` and `writer`; `invite` takes an optional `role`.
+- `check_policy` and `is_managed` treat `c-` keys as managed.
+- The managed labeler space names the community's app, which answers nothing for accounts and serves labels through its own views.
+
+### Added
+- `CommunityRef`, `community_skey`, `is_community_skey`, `is_community_space`, `check_community_policy` and `in_same_community`.
+- `tools.umbrae.community.listMyCommunities`, `registerSpace` (the app syncs a writer's new space at once) and `registerProfile {key, delegationToken}` (the app syncs the caller's profile space for its community audiences). `COMMUNITY_LIST_MINE`, `COMMUNITY_REGISTER_SPACE`, `COMMUNITY_REGISTER_PROFILE` and `COMMUNITY_DEFS`.
+- Placeholders: `tools.umbrae.community.defs#unavailablePost` (`UNAVAILABLE_POST`) and `referenced_post`, which answers `Visible`, `Blocked` or `Unavailable` for a post a thread refers to. A reply stays visible when its parent doesn't, and a removal looks like a deletion.
+- `Role`, a member's role in a community.
+- Rules for gates and reply rules in communities, records outside a community that name records in it, and handing a profile to a community app, in the design docs. The profile scope gains `manage=update`, for adding a community app to `allowedApps`.
+- Interop coverage on the reference PDS against a stand-in app: writes in one's own space ask the app nothing; the app's attested sync and notifications; refused unattested, foreign, forged and replayed attestations; no credential for any member's, reader's or outsider's delegation; removal withdrawing the app's registration and leaving placeholders; a lookalike failing the policy check; a profile space limited by `allowedApps`; and failing closed.
+
+### Removed
+- **Breaking:** `COMMUNITY_SKEY`, `tools.umbrae.community.declaration`, `CommunityDeclaration`, `validate_community_declaration` and `COMMUNITY_DECLARATION`.
+- **Breaking:** the legacy profile copy by a member in a community space. Legacy copies are the owner's own, in its followers, group or everyone space, and `profile_for_viewer` no longer ranks community copies.
+
 ## [0.7.4] - 2026-11-27
 
 ### Fixed
@@ -205,7 +232,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.7.4...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/skydeval/umbrae/compare/v0.7.4...v0.8.0
 [0.7.4]: https://github.com/skydeval/umbrae/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/skydeval/umbrae/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/skydeval/umbrae/compare/v0.7.1...v0.7.2
