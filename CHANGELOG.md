@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-11-27
+
+### Added
+- One hidden profile for every audience. Per-audience copies drifted apart, because an edit only reached the copy being edited. Now:
+  - `tools.umbrae.profile` lives at `self` in the owner's profile space: the key `profile` (`profile_space`, `PROFILE_SKEY`), the group policy, and no members;
+  - the record lists its `audiences`: followers, one of the owner's groups, a community the owner is in, or everyone the serving app admits;
+  - the serving app reads it on the owner's delegation, and shows it and its blobs to anyone in a listed audience (`can_view_profile`, `can_view_profile_blob`, `AudienceSource`). A profile space with members shows the profile to nobody.
+- `Audience`, `Profile::audiences`, `Profile::blobs`, `MAX_PROFILE_AUDIENCES`, and the `AUDIENCE_*` types.
+- Interop coverage of a profile space on the reference PDS: only the owner's delegation reads it, and a follower sees the profile and its avatar.
+
+### Deprecated
+- Per-audience profile copies (0.7.0 to 0.7.2) are legacy. Read them with `profile_for_viewer` only while the owner has no profile-space record. On the next save a client writes the one record and deletes the copies.
+
 ## [0.7.2] - 2026-11-26
 
 ### Added
@@ -175,7 +188,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/skydeval/umbrae/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/skydeval/umbrae/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/skydeval/umbrae/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/skydeval/umbrae/compare/v0.6.0...v0.7.0

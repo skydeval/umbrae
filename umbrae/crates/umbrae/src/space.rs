@@ -8,6 +8,13 @@
 //! | a shared list | a TID | memberspace, not public, policy published, members **not** published |
 //! | a community | `community` | managedspace, policy published; the authority is the community's own account |
 //! | everyone with Umbrae | `everyone` | managedspace, policy published |
+//! | the owner's profile | `profile` | memberspace, as a group, with **no** members |
+//!
+//! The profile space holds an account's one hidden profile. Only the owner
+//! and the apps it delegates to (its serving app) read it; the serving app
+//! shows the profile to the audiences the record lists. Members would read
+//! the audience list and bypass it, so a reader refuses a profile space
+//! that has any (see [`crate::profile`]).
 //!
 //! A managed space's membership is held by its managing app, which the
 //! PDS asks through `com.atproto.managedspace.checkAccess`. That app may be
@@ -27,7 +34,9 @@
 use umbrae_core::policy::MemberAccess;
 use umbrae_core::policy::{ManagedPolicy, MemberPolicy, Policy};
 use umbrae_core::uri::{is_valid_tid, SpaceRef, UriError};
-use umbrae_lexicons::{COMMUNITY_SKEY, EVERYONE_SKEY, FOLLOWERS_SKEY, LIST_SPACE_TYPE, SPACE_TYPE};
+use umbrae_lexicons::{
+    COMMUNITY_SKEY, EVERYONE_SKEY, FOLLOWERS_SKEY, LIST_SPACE_TYPE, PROFILE_SKEY, SPACE_TYPE,
+};
 
 /// The only-me space's key.
 pub const ONLY_ME_SKEY: &str = "self";
@@ -54,6 +63,12 @@ pub fn community_space(community: &str) -> Result<SpaceRef, UriError> {
 /// An account's "everyone with Umbrae" space.
 pub fn everyone_space(owner: &str) -> Result<SpaceRef, UriError> {
     SpaceRef::new(owner, SPACE_TYPE, EVERYONE_SKEY)
+}
+
+/// An account's profile space. It takes the group policy and has no
+/// members; `allowed_apps` limits which serving apps may read it.
+pub fn profile_space(owner: &str) -> Result<SpaceRef, UriError> {
+    SpaceRef::new(owner, SPACE_TYPE, PROFILE_SKEY)
 }
 
 /// Whether the space's members come from a managing app.
@@ -174,7 +189,9 @@ pub fn check_policy(space: &SpaceRef, policy: &Policy) -> Result<(), Misconfigur
             Err(Misconfigured::Unpublished)
         }
         (false, Policy::Member(_))
-            if is_valid_tid(space.skey()) || space.skey() == FOLLOWERS_SKEY =>
+            if is_valid_tid(space.skey())
+                || space.skey() == FOLLOWERS_SKEY
+                || space.skey() == PROFILE_SKEY =>
         {
             Ok(())
         }

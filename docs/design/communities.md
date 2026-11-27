@@ -61,22 +61,36 @@ Feeds are author-driven: there's no algorithm.
 - **Who sees what:** `can_view_feed_post` shows a post in a feed when it names the feed, its author is on the feed's **current** author list, and the viewer may see both. Taking someone off the list takes their posts out of the feed. The posts stay in the community.
 - **Readers:** the whole community can read any feed in it. Feeds don't span communities.
 
-## One profile per audience
+## One profile, many audiences
 
-A hidden profile has one copy per audience, each at `self`:
+An account has **one** hidden profile, so an edit reaches every audience at once:
+- **Where it lives:** `tools.umbrae.profile` at `self` in the owner's profile space, `tools.umbrae.space` with the key `profile` (`profile_space`). The space takes the group policy and has **no members**.
+- **Who reads the record:** the owner, and the serving app the owner delegates to. Nobody else can read the space, so nobody else sees the audience list, and a serving app never returns it to anyone but the owner.
+- **Who sees the profile:** the record lists its `audiences`. The serving app shows the profile, and serves its blobs, to anyone in one of them (`can_view_profile`, `can_view_profile_blob`):
 
-| Audience | Space | Written by |
+| Audience | `$type` | Who's in it |
 |---|---|---|
-| a group | the group's space | the owner |
-| approved followers | the owner's `followers` space | the owner |
-| a community | the community space | the member, in their own repo |
-| everyone with Umbrae | the owner's `everyone` space (`everyone_space`), a managedspace whose app answers read for any admitted account and write for the owner | the owner |
+| followers | `#followersAudience` | members of the owner's `followers` space |
+| a group | `#groupAudience {space}` | members of one of the owner's own groups |
+| a community | `#communityAudience {space}` | members of the community, while the owner is still one |
+| everyone with Umbrae | `#everyoneAudience` | anyone the serving app admits |
 
-A profile never lives in only-me, because nobody else can read only-me, the managing app included. `profile_for_viewer` picks the copy a viewer sees:
-- the narrowest audience they may see wins, in the order group, followers, community, everyone;
-- ties go to the latest `updatedAt` (or `createdAt`).
+- **Rules:**
+  - an empty list shows the profile to the owner alone, and deleting the record turns it off;
+  - turning an audience off is an edit to the list;
+  - blocks cut either way;
+  - an audience type a reader doesn't know grants nothing;
+  - a profile space with any members shows the profile to nobody, because members could read the list and get past it.
+- **Without a serving app:** a group member's client can't read the profile space, so it asks the serving app for the profile.
 
-A different face per group comes out of this directly.
+A profile never lives in only-me, because nobody else can read only-me, the serving app included.
+
+### Moving from copies
+
+0.7.0 to 0.7.2 kept one copy per audience. Those copies drifted apart, because an edit reached only the copy being edited. They're now legacy:
+- **Readers:** use the profile-space record when there is one, and ignore the copies. Until then, fall back to `profile_for_viewer` over the copies.
+- **Clients:** on the next save, write the one record from the newest copy, keep any avatar or banner (and its alt text) that only an older copy has, list the audiences the copies were in, then delete the copies.
+- **Validation:** copies still validate, without `audiences`. A record outside the profile space that lists audiences is refused.
 
 ## Shareable lists
 

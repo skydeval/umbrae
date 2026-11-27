@@ -23,6 +23,7 @@ pub mod access;
 pub mod community;
 pub mod labeler;
 pub mod placement;
+pub mod profile;
 pub mod space;
 
 pub use access::{Members, SpaceState, Tri, ViewContext};

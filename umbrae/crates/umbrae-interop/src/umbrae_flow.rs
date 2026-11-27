@@ -851,3 +851,140 @@ pub(crate) fn followers(
     );
     Ok(())
 }
+
+/// What the stand-in serving app holds for a profile's audiences.
+struct Held(Vec<SpaceState>);
+
+impl umbrae::profile::AudienceSource for Held {
+    fn state(&self, space: &SpaceRef) -> Option<&SpaceState> {
+        self.0.iter().find(|s| s.space == *space)
+    }
+    fn admits(&self, _: &str) -> bool {
+        false
+    }
+}
+
+/// The one profile: Alice keeps it in her profile space, which has no
+/// members. An app reads it on her delegation and shows it to her
+/// followers; Bob can't read the space himself.
+pub(crate) fn profile(
+    pds: &Pds,
+    dir: &crate::plc::Directory,
+    report: &mut Report,
+    alice: &Account,
+    bob: &Account,
+    carol: &Account,
+) -> Result<(), String> {
+    use umbrae::profile::{can_view_profile, can_view_profile_blob};
+    use umbrae::space::profile_space;
+    use umbrae_lexicons::AUDIENCE_FOLLOWERS;
+
+    let space = profile_space(&alice.did).map_err(|e| e.to_string())?;
+    let space_str = space.to_string();
+    let wanted = group_policy(None);
+    let mut policy_json = json!({ "$type": "com.atproto.memberspace.policy" });
+    for (k, v) in wanted.to_map() {
+        if let D::Bool(b) = v {
+            policy_json[k] = json!(b);
+        }
+    }
+    pds.post(
+        "com.atproto.space.createSpace",
+        &json!({ "spaceType": SPACE_TYPE, "skey": space.skey(), "policy": policy_json }),
+        &alice.auth(),
+    )?
+    .ok("createSpace profile")?;
+
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(PNG_1X1)
+        .map_err(|e| e.to_string())?;
+    let avatar_cid = Cid::for_raw(&png);
+    let blob = pds
+        .post_bytes(
+            "com.atproto.repo.uploadBlob",
+            "image/png",
+            &png,
+            &alice.auth(),
+        )?
+        .ok("uploadBlob")?
+        .json()["blob"]
+        .clone();
+    let record = json!({ "$type": PROFILE, "displayName": "Alice", "avatar": blob,
+        "audiences": [{ "$type": AUDIENCE_FOLLOWERS }], "createdAt": CREATED });
+    pds.post(
+        "com.atproto.space.putRecord",
+        &json!({ "space": space_str, "repo": alice.did, "collection": PROFILE,
+            "rkey": SELF_RKEY, "record": record }),
+        &alice.auth(),
+    )?
+    .ok("putRecord profile")?;
+
+    // The app syncs on Alice's delegation; Bob's own is refused.
+    let synced = sync(pds, dir, &space, alice, None)?;
+    let state = state_of(&space, &synced);
+    let bob_direct = sync(pds, dir, &space, bob, None);
+    let uri = space
+        .record(&alice.did, PROFILE, SELF_RKEY)
+        .map_err(|e| e.to_string())?;
+    let found = umbrae_records(&space, &synced)
+        .into_iter()
+        .find(|(u, _)| *u == uri)
+        .map(|(_, v)| v);
+    let profile = match found {
+        Some(Ok(Some(Record::Profile(p)))) => *p,
+        other => return Err(format!("profile space record: {other:?}")),
+    };
+    report.check(
+        "profile: the one profile validates with its audiences, its space passes check_policy with no members, and only the owner's delegation reads it",
+        match (&state.policy, &bob_direct) {
+            (Some(p), Err(_))
+                if check_policy(&space, p).is_ok()
+                    && state.members.is_empty()
+                    && profile.audiences.as_ref().is_some_and(|a| a.len() == 1) =>
+            {
+                Ok("members none; bob refused".into())
+            }
+            (p, b) => Err(format!(
+                "policy {p:?}, members {}, bob {:?}",
+                state.members.len(),
+                b.as_ref().map(|_| "synced")
+            )),
+        },
+    );
+
+    // The app's view: Bob is an approved follower (from the followers
+    // space), Carol isn't.
+    let followers = followers_space(&alice.did).map_err(|e| e.to_string())?;
+    let held = Held(vec![state_of(
+        &followers,
+        &sync(pds, dir, &followers, alice, None)?,
+    )]);
+    let ctx = Ctx(BTreeSet::new());
+    let via_space = pds.get(
+        "com.atproto.space.getBlob",
+        &[
+            ("space", &space_str),
+            ("repo", &alice.did),
+            ("cid", &avatar_cid.to_string()),
+        ],
+        &credential_headers(&synced.credential, &alice.did, &synced.key),
+    )?;
+    report.check(
+        "profile: a follower sees it and its avatar, which the app fetches through the profile space; Carol sees neither",
+        if can_view_profile(Some(&bob.did), &uri, &profile, &state, &held, &ctx)
+            && can_view_profile_blob(Some(&bob.did), &avatar_cid, &uri, &profile, &state, &held, &ctx)
+            && !can_view_profile(Some(&carol.did), &uri, &profile, &state, &held, &ctx)
+            && via_space.status == 200
+            && Cid::for_raw(&via_space.body) == avatar_cid
+        {
+            Ok(format!("avatar {} bytes", via_space.body.len()))
+        } else {
+            Err(format!(
+                "space getBlob HTTP {} {}",
+                via_space.status,
+                via_space.error_name()
+            ))
+        },
+    );
+    Ok(())
+}

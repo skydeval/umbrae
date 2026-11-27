@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "An account's hidden profile, one copy per audience, each at key self: in the owner's followers space, a group or its everyone space (written by the owner), or in a community space (written by the member, in their own repo). Never in only-me. A viewer sees the copy for the narrowest audience they're in: a group, then followers, then a community, then everyone; ties go to the latest updatedAt. Blobs are fetched through space getBlob, never publicly.",
+      "description": "An account's hidden profile: one record, at key self in the owner's profile space (key profile, a memberspace with no members), listing the audiences that may see it. Only the owner and its serving app read the record; the serving app shows it, and serves its blobs, to anyone in a listed audience, and never shows the audience list to anyone but the owner. Legacy (0.7.0 to 0.7.2): one copy per audience at self in a followers, group, everyone or community space, without audiences; read only while the owner has no profile-space record. Blobs are fetched through space getBlob, never publicly.",
       "key": "literal:self",
       "record": {
         "type": "object",
@@ -98,6 +98,20 @@
             "type": "string",
             "format": "datetime",
             "description": "When this copy last changed."
+          },
+          "audiences": {
+            "type": "array",
+            "maxLength": 100,
+            "items": {
+              "type": "union",
+              "refs": [
+                "#followersAudience",
+                "#groupAudience",
+                "#communityAudience",
+                "#everyoneAudience"
+              ]
+            },
+            "description": "Who may see the profile. Required in the profile space and forbidden elsewhere. Empty: the owner alone. Unknown types grant nothing."
           }
         }
       }
@@ -149,6 +163,44 @@
           "description": "The site's icon, fetched through space getBlob."
         }
       }
+    },
+    "followersAudience": {
+      "type": "object",
+      "description": "The owner's approved followers: members of its followers space.",
+      "properties": {}
+    },
+    "groupAudience": {
+      "type": "object",
+      "required": [
+        "space"
+      ],
+      "description": "Members of one of the owner's own groups.",
+      "properties": {
+        "space": {
+          "type": "string",
+          "format": "space-ref",
+          "description": "The group's space, in the at:space/ form."
+        }
+      }
+    },
+    "communityAudience": {
+      "type": "object",
+      "required": [
+        "space"
+      ],
+      "description": "Members of a community, while the owner is still a member.",
+      "properties": {
+        "space": {
+          "type": "string",
+          "format": "space-ref",
+          "description": "The community's space, in the at:space/ form."
+        }
+      }
+    },
+    "everyoneAudience": {
+      "type": "object",
+      "description": "Anyone the serving app admits.",
+      "properties": {}
     }
   }
 }

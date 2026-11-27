@@ -12,10 +12,11 @@ Follow requests are the app's business and never public. Approving a request is 
 
 ## Hidden profile
 
-`tools.umbrae.profile` has one copy per audience at `self` (see [Communities, feeds and audiences](communities.md)). The followers copy, written by the owner in its followers space, is what approved followers see. Fields: `{displayName?, description?, pronouns?, pronounSets?, pronounDisplayMode?, website?, links?, avatar?, avatarAlt?, banner?, bannerAlt?, createdAt}`, with `app.bsky.actor.profile`'s limits. `website` and every link `url` are https URLs. There are at most 10 links, each with an optional 30-grapheme `title` and an `icon` image. The pronoun sets follow `app.nearhorizon.actor.pronouns`.
+`tools.umbrae.profile` is one record at `self` in the owner's profile space, listing the audiences that see it (see [One profile, many audiences](communities.md#one-profile-many-audiences)). Approved followers see it when `followers` is listed. Fields: `{displayName?, description?, pronouns?, pronounSets?, pronounDisplayMode?, website?, links?, avatar?, avatarAlt?, banner?, bannerAlt?, audiences, createdAt, updatedAt?}`, with `app.bsky.actor.profile`'s limits. `website` and every link `url` are https URLs. There are at most 10 links, each with an optional 30-grapheme `title` and an `icon` image. The pronoun sets follow `app.nearhorizon.actor.pronouns`.
 
-The avatar and banner are blobs referenced only from the space:
-- readers fetch them with space `getBlob` and a credential, then check the CID;
+The avatar, banner and link icons are blobs referenced only from the profile space:
+- the owner fetches them with space `getBlob` and its own session; the serving app, with its credential for the profile space. Both check the CID;
+- everyone else gets them from the serving app, which serves a blob only to someone who may see the profile and only if the profile refers to it;
 - the public `sync.getBlob` doesn't serve them.
 
 ## Hidden follows

@@ -54,9 +54,10 @@ pub use list::{
     EXEMPTION_LABEL, EXEMPTION_LABELER, EXEMPTION_LIST,
 };
 pub use social::{
-    Follow, Postgate, Profile, ProfileLink, PronounSet, ReplyRule, Threadgate, MAX_LINK_TITLE,
-    MAX_PROFILE_LINKS, MAX_PRONOUN_FORMS, MAX_PRONOUN_SETS, RULE_DISABLE, RULE_FOLLOWER,
-    RULE_FOLLOWING, RULE_LIST, RULE_MENTION,
+    Audience, Follow, Postgate, Profile, ProfileLink, PronounSet, ReplyRule, Threadgate,
+    AUDIENCE_COMMUNITY, AUDIENCE_EVERYONE, AUDIENCE_FOLLOWERS, AUDIENCE_GROUP, MAX_LINK_TITLE,
+    MAX_PROFILE_AUDIENCES, MAX_PROFILE_LINKS, MAX_PRONOUN_FORMS, MAX_PRONOUN_SETS, RULE_DISABLE,
+    RULE_FOLLOWER, RULE_FOLLOWING, RULE_LIST, RULE_MENTION,
 };
 pub use validate::{
     validate_record, Bookmark, Group, Invalid, Like, Post, PublicUri, Record, Reply, Repost,
@@ -96,6 +97,10 @@ pub const FOLLOWERS_SKEY: &str = "followers";
 pub const COMMUNITY_SKEY: &str = "community";
 /// An account's "everyone with Umbrae" space key.
 pub const EVERYONE_SKEY: &str = "everyone";
+/// An account's profile space key: the one space that holds its hidden
+/// profile. The owner is its only member; the serving app reads it on the
+/// owner's delegation and shows the profile to the audiences it lists.
+pub const PROFILE_SKEY: &str = "profile";
 /// The space type of a shared list.
 pub const LIST_SPACE_TYPE: &str = "tools.umbrae.listSpace";
 /// The record key for singletons, and the labeler space's key.

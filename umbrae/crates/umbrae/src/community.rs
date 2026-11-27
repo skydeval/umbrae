@@ -8,10 +8,10 @@
 //!   group.
 //! - **A feed** shows the posts that name it, from accounts on its current
 //!   author list, to anyone who may see the community.
-//! - **A profile** has one copy per audience. A viewer sees the copy for
-//!   the narrowest audience they're in: a group, then followers, then a
-//!   community, then everyone. Ties go to the latest `updatedAt` (or
-//!   `createdAt`).
+//! - **Legacy profile copies** (0.7.0 to 0.7.2 wrote one per audience): a
+//!   viewer sees the copy for the narrowest audience they're in. Read them
+//!   only while the owner has no profile-space record; see
+//!   [`crate::profile`], which replaces them.
 //! - **A list subscription** shows only to its owner, and only while they
 //!   may still see the list.
 
@@ -67,7 +67,8 @@ pub struct ProfileCopy<'a> {
     pub state: &'a SpaceState,
 }
 
-/// Which of an account's profile copies `viewer` sees, by index: the
+/// Legacy: for owners not yet moved to the one profile in
+/// [`crate::profile`]. Which of an account's profile copies `viewer` sees, by index: the
 /// narrowest audience they may see, ties to the latest. Copies by anyone
 /// but `account` are ignored. `None` if they may see none.
 pub fn profile_for_viewer(

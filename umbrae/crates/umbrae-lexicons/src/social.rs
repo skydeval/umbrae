@@ -1,8 +1,9 @@
 //! Hidden profiles, hidden follows, thread gates and post gates.
 //!
-//! - `tools.umbrae.profile`: one copy per audience, at `self`. The owner
-//!   writes it into its followers space, a group or its everyone space; a
-//!   member writes its own into a community space. Never in only-me.
+//! - `tools.umbrae.profile`: one record, at `self` in the owner's profile
+//!   space (key `profile`), listing its `audiences`. The serving app shows
+//!   it to anyone in a listed audience. Copies elsewhere (one per audience,
+//!   as in 0.7.x) are legacy: still read, until the owner saves again.
 //! - `tools.umbrae.follow`: a DID, in the follower's own only-me space.
 //! - `tools.umbrae.threadgate` and `tools.umbrae.postgate`: by a post's
 //!   author, in the post's space, at the post's record key. They name
@@ -14,7 +15,7 @@
 
 use crate::labeler::{blob, BlobRef};
 use crate::validate::{bounded, datetime, is_datetime, mentions_space_uri, string, Invalid};
-use crate::{COMMUNITY_SKEY, POST, SELF_RKEY};
+use crate::{COMMUNITY_SKEY, POST, PROFILE_SKEY, SELF_RKEY, SPACE_TYPE};
 use std::collections::BTreeMap;
 use umbrae_core::drisl::Value;
 use umbrae_core::uri::{is_space_uri, is_valid_did, is_valid_tid, SpaceRecordUri, SpaceRef};
@@ -27,6 +28,13 @@ pub const RULE_FOLLOWER: &str = "tools.umbrae.threadgate#followerRule";
 pub const RULE_LIST: &str = "tools.umbrae.threadgate#listRule";
 pub const RULE_DISABLE: &str = "tools.umbrae.postgate#disableRule";
 
+/// At most this many audiences on one profile.
+pub const MAX_PROFILE_AUDIENCES: usize = 100;
+pub const AUDIENCE_FOLLOWERS: &str = "tools.umbrae.profile#followersAudience";
+pub const AUDIENCE_GROUP: &str = "tools.umbrae.profile#groupAudience";
+pub const AUDIENCE_COMMUNITY: &str = "tools.umbrae.profile#communityAudience";
+pub const AUDIENCE_EVERYONE: &str = "tools.umbrae.profile#everyoneAudience";
+
 /// At most this many profile links, as on the public profile.
 pub const MAX_PROFILE_LINKS: usize = 10;
 /// A link title's limit in graphemes, as on the public profile.
@@ -36,7 +44,7 @@ pub const MAX_PRONOUN_SETS: usize = 10;
 /// At most this many forms in one pronoun set.
 pub const MAX_PRONOUN_FORMS: usize = 12;
 
-/// An account's hidden profile, for its approved followers.
+/// An account's hidden profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Profile {
@@ -57,8 +65,38 @@ pub struct Profile {
     pub banner: Option<BlobRef>,
     pub banner_alt: Option<String>,
     pub created_at: String,
-    /// When it last changed. Breaks ties between copies a viewer could see.
+    /// When it last changed. Breaks ties between legacy copies.
     pub updated_at: Option<String>,
+    /// Who may see it. `Some` exactly when the record is in the owner's
+    /// profile space; `None` for a legacy per-audience copy. Audience types
+    /// this version doesn't know are dropped, so they grant nothing.
+    pub audiences: Option<Vec<Audience>>,
+}
+
+impl Profile {
+    /// Every blob the profile refers to: avatar, banner and link icons. A
+    /// serving app serves a profile blob only if it's one of these.
+    pub fn blobs(&self) -> impl Iterator<Item = &BlobRef> {
+        self.avatar
+            .iter()
+            .chain(self.banner.iter())
+            .chain(self.links.iter().filter_map(|l| l.icon.as_ref()))
+    }
+}
+
+/// One audience a profile is shown to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Audience {
+    /// The owner's approved followers: members of its followers space.
+    Followers,
+    /// Members of one of the owner's own groups.
+    Group(SpaceRef),
+    /// Members of a community the owner belongs to, while the owner is
+    /// still a member.
+    Community(SpaceRef),
+    /// Anyone the serving app admits.
+    Everyone,
 }
 
 /// One pronoun set: its forms, such as `["she", "her"]`.
@@ -117,19 +155,36 @@ pub struct Postgate {
 }
 
 pub(crate) fn profile(m: &Map, uri: &SpaceRecordUri) -> Result<Profile, Invalid> {
-    // One copy per audience, at self: the owner's followers space, a
-    // group, or its everyone space, written by the authority; or a member's
-    // own copy in a community space. Never in only-me, which nobody else
-    // reads.
     let space = uri.space();
-    let placed = uri.rkey() == SELF_RKEY
-        && space.skey() != SELF_RKEY
-        && (space.skey() == COMMUNITY_SKEY || uri.author() == space.authority());
-    if !placed {
-        return Err(Invalid(
-            "a hidden profile is its owner's, at self, in an audience space it writes to",
-        ));
+    if uri.rkey() != SELF_RKEY || space.skey() == SELF_RKEY {
+        return Err(Invalid("a hidden profile is at self, never in only-me"));
     }
+    let audiences = if space.skey() == PROFILE_SKEY {
+        // The one profile: by the owner, in its own profile space.
+        if uri.author() != space.authority() {
+            return Err(Invalid("a profile space holds only its owner's profile"));
+        }
+        Some(audiences(m.get("audiences"), space.authority())?)
+    } else {
+        // A legacy copy: the owner's followers space, a group, or its
+        // everyone space, by the authority; or a member's own copy in a
+        // community space.
+        if !(space.skey() == COMMUNITY_SKEY || uri.author() == space.authority()) {
+            return Err(Invalid(
+                "a hidden profile is its owner's, at self, in an audience space it writes to",
+            ));
+        }
+        if m.contains_key("audiences") {
+            return Err(Invalid(
+                "only the profile in the profile space lists audiences",
+            ));
+        }
+        None
+    };
+    // Audiences name spaces; nothing else in a profile may.
+    let mut rest = m.clone();
+    rest.remove("audiences");
+    let m = &rest;
     no_hidden(m)?;
     let website = string(m, "website", 0, 2048, 2048)?;
     if let Some(w) = &website {
@@ -155,7 +210,58 @@ pub(crate) fn profile(m: &Map, uri: &SpaceRecordUri) -> Result<Profile, Invalid>
             Some(Value::Text(t)) if is_datetime(t) => Some(t.clone()),
             Some(_) => return Err(Invalid("updatedAt must be an atproto datetime")),
         },
+        audiences,
     })
+}
+
+/// The audience list. Required; may be empty (the owner alone). Groups
+/// must be the owner's own; duplicates and malformed entries refuse;
+/// unknown types are dropped.
+fn audiences(v: Option<&Value>, owner: &str) -> Result<Vec<Audience>, Invalid> {
+    let Some(Value::Array(items)) = v else {
+        return Err(Invalid("the profile lists its audiences"));
+    };
+    if items.len() > MAX_PROFILE_AUDIENCES {
+        return Err(Invalid("too many audiences"));
+    }
+    let mut out = Vec::new();
+    for item in items {
+        let Value::Map(a) = item else {
+            return Err(Invalid("an audience must be an object"));
+        };
+        let space = || match a.get("space") {
+            Some(Value::Text(t)) => SpaceRef::parse(t)
+                .ok()
+                .filter(|s| s.space_type() == SPACE_TYPE)
+                .ok_or(Invalid("an audience names an Umbrae space")),
+            _ => Err(Invalid("an audience names an Umbrae space")),
+        };
+        let audience = match rule_type(a) {
+            Some(AUDIENCE_FOLLOWERS) => Audience::Followers,
+            Some(AUDIENCE_EVERYONE) => Audience::Everyone,
+            Some(AUDIENCE_GROUP) => {
+                let s = space()?;
+                if s.authority() != owner || !is_valid_tid(s.skey()) {
+                    return Err(Invalid("a group audience is one of the owner's own groups"));
+                }
+                Audience::Group(s)
+            }
+            Some(AUDIENCE_COMMUNITY) => {
+                let s = space()?;
+                if s.skey() != COMMUNITY_SKEY {
+                    return Err(Invalid("a community audience names a community space"));
+                }
+                Audience::Community(s)
+            }
+            Some(_) => continue,
+            None => return Err(Invalid("an audience must have a $type")),
+        };
+        if out.contains(&audience) {
+            return Err(Invalid("an audience is listed twice"));
+        }
+        out.push(audience);
+    }
+    Ok(out)
 }
 
 fn is_https(url: &str) -> bool {
