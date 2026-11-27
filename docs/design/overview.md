@@ -27,7 +27,7 @@ Spaces are **access control, not encryption**:
 
 Hidden means hidden from the public and from people outside the audience, **not from the community's moderators**:
 - A hidden-post protocol mustn't become a place where anything can be posted unseen.
-- The serving app makes hidden posts available to the community's moderation service.
+- The serving app makes hidden posts available to the community's moderation service. Hidden profiles reach moderation the same way, with the audiences they're shown to.
 - Moderators never appear in a space's member list. Authors can't opt out, and the community's terms cover it.
 
 ## Space URIs

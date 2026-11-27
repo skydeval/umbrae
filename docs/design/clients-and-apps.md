@@ -10,6 +10,8 @@
 | the user's own groups and only-me (create, members, delete) | `space:tools.umbrae.space?collection=tools.umbrae.group&collection=tools.umbrae.bookmark&collection=tools.umbrae.list&collection=tools.umbrae.listitem&collection=tools.umbrae.exemption&manage=create&manage=update&manage=delete` |
 | own shared lists | `space:tools.umbrae.listSpace?collection=tools.umbrae.list&collection=tools.umbrae.listitem&manage=create&manage=update&manage=delete` |
 | reading lists the user subscribes to | `space:tools.umbrae.listSpace?authority=*&action=read` |
+| the user's hidden profile (create the profile space, write the record) | `space:tools.umbrae.space?skey=profile&collection=tools.umbrae.profile&manage=create` |
+| a serving app that fetches the owner's profile delegations itself | `space:tools.umbrae.space?skey=profile&action=read` |
 
 `manage=create` covers `createSpace`, `manage=update` covers `putMembers` and `removeMembers`, and `manage=delete` covers `deleteSpace`.
 

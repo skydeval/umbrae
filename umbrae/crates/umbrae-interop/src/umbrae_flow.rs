@@ -922,7 +922,11 @@ pub(crate) fn profile(
     // The app syncs on Alice's delegation; Bob's own is refused.
     let synced = sync(pds, dir, &space, alice, None)?;
     let state = state_of(&space, &synced);
-    let bob_direct = sync(pds, dir, &space, bob, None);
+    let bob_token = delegation(pds, &space_str, bob)?;
+    let bob_direct = expect_refusal(
+        &authorize_with(pds, &space_str, Some(&bob_token))?,
+        Some("SpaceNotFound"),
+    );
     let uri = space
         .record(&alice.did, PROFILE, SELF_RKEY)
         .map_err(|e| e.to_string())?;
@@ -935,19 +939,18 @@ pub(crate) fn profile(
         other => return Err(format!("profile space record: {other:?}")),
     };
     report.check(
-        "profile: the one profile validates with its audiences, its space passes check_policy with no members, and only the owner's delegation reads it",
+        "profile: the one profile validates with its audiences, its space passes check_policy with no members, and a non-owner's delegation is refused as SpaceNotFound",
         match (&state.policy, &bob_direct) {
-            (Some(p), Err(_))
+            (Some(p), Ok(refused))
                 if check_policy(&space, p).is_ok()
                     && state.members.is_empty()
                     && profile.audiences.as_ref().is_some_and(|a| a.len() == 1) =>
             {
-                Ok("members none; bob refused".into())
+                Ok(format!("members none; bob {refused}"))
             }
             (p, b) => Err(format!(
-                "policy {p:?}, members {}, bob {:?}",
-                state.members.len(),
-                b.as_ref().map(|_| "synced")
+                "policy {p:?}, members {}, bob {b:?}",
+                state.members.len()
             )),
         },
     );
@@ -986,5 +989,157 @@ pub(crate) fn profile(
             ))
         },
     );
+
+    // Migration: Alice deletes the legacy followers copy, which shares the
+    // avatar. The profile space still serves it; the public side never does.
+    let del = pds
+        .post(
+            "com.atproto.space.deleteRecord",
+            &json!({ "space": followers.to_string(), "repo": alice.did,
+                "collection": PROFILE, "rkey": SELF_RKEY }),
+            &alice.auth(),
+        )?
+        .status;
+    let fresh = sync(pds, dir, &space, alice, None)?;
+    let after = pds.get(
+        "com.atproto.space.getBlob",
+        &[
+            ("space", &space_str),
+            ("repo", &alice.did),
+            ("cid", &avatar_cid.to_string()),
+        ],
+        &credential_headers(&fresh.credential, &alice.did, &fresh.key),
+    )?;
+    let public = pds.get(
+        "com.atproto.sync.getBlob",
+        &[("did", &alice.did), ("cid", &avatar_cid.to_string())],
+        &vec![],
+    )?;
+    report.check(
+        "profile: after the legacy copy is deleted, the shared avatar still comes from the profile space and never publicly",
+        match (del, after.status, expect_refusal(&public, Some("BlobNotFound"))) {
+            (200, 200, Ok(p)) if Cid::for_raw(&after.body) == avatar_cid => {
+                Ok(format!("space getBlob 200; public {p}"))
+            }
+            (d, a, p) => Err(format!("delete {d}, space getBlob {a}, public {p:?}")),
+        },
+    );
+
+    // Misconfigured profile spaces show to nobody: Carol's has an unpublished
+    // member list with Bob in it (he reads the record directly), Bob's is
+    // public read (anyone gets a credential without a delegation).
+    let admit_all = AdmitAll;
+    let (cspace, cstate, cprof) = misconfigured_profile(pds, dir, carol, false, false, Some(bob))?;
+    let curi = cspace
+        .record(&carol.did, PROFILE, SELF_RKEY)
+        .map_err(|e| e.to_string())?;
+    let bob_reads = sync(pds, dir, &cspace, bob, None).map(|b| {
+        b.repos
+            .get(&carol.did)
+            .is_some_and(|rs| rs.iter().any(|r| r.collection == PROFILE))
+    });
+    let cshown = [&carol.did, &alice.did]
+        .iter()
+        .any(|v| can_view_profile(Some(v), &curi, &cprof, &cstate, &admit_all, &ctx));
+    report.check(
+        "profile: a profile space with an unpublished member list shows to nobody, though its hidden member reads the record",
+        match &bob_reads {
+            Ok(true) if cstate.members.is_empty() && !cshown => {
+                Ok("members seen 0; bob reads it; shown to nobody".into())
+            }
+            b => Err(format!("bob {b:?}, members {}, shown {cshown}", cstate.members.len())),
+        },
+    );
+    let (bspace, bstate, bprof) = misconfigured_profile(pds, dir, bob, true, true, None)?;
+    let anon = authorize_with(pds, &bspace.to_string(), None)?;
+    let buri = bspace
+        .record(&bob.did, PROFILE, SELF_RKEY)
+        .map_err(|e| e.to_string())?;
+    let bshown = [&bob.did, &carol.did]
+        .iter()
+        .any(|v| can_view_profile(Some(v), &buri, &bprof, &bstate, &admit_all, &ctx));
+    report.check(
+        "profile: a public-read profile space shows to nobody, though anyone gets a credential for it",
+        if anon.status == 200 && !bshown {
+            Ok("anonymous credential; shown to nobody".into())
+        } else {
+            Err(format!("anon HTTP {}, shown {bshown}", anon.status))
+        },
+    );
     Ok(())
+}
+
+/// A serving app that admits everyone and holds no audience spaces.
+struct AdmitAll;
+
+impl umbrae::profile::AudienceSource for AdmitAll {
+    fn state(&self, _: &SpaceRef) -> Option<&SpaceState> {
+        None
+    }
+    fn admits(&self, _: &str) -> bool {
+        true
+    }
+}
+
+/// `authorizeSpaceSync` with an optional delegation, for checking refusals.
+fn authorize_with(pds: &Pds, space: &str, token: Option<&str>) -> Result<Resp, String> {
+    let key = SigningKey::random(&mut OsRng);
+    let kid = didkey::format_p256(&key.verifying_key().into());
+    let mut body = json!({ "space": space, "credentialKey": kid });
+    if let Some(t) = token {
+        body["delegationToken"] = json!(t);
+    }
+    pds.post("com.atproto.space.authorizeSpaceSync", &body, &vec![])
+}
+
+/// A profile space with the given policy flags and optionally a member,
+/// holding a profile shown to everyone; synced on the owner's delegation.
+fn misconfigured_profile(
+    pds: &Pds,
+    dir: &crate::plc::Directory,
+    owner: &Account,
+    public_read: bool,
+    publish_members: bool,
+    member: Option<&Account>,
+) -> Result<(SpaceRef, SpaceState, umbrae_lexicons::Profile), String> {
+    let space = umbrae::space::profile_space(&owner.did).map_err(|e| e.to_string())?;
+    let s = space.to_string();
+    let policy = json!({ "$type": "com.atproto.memberspace.policy", "publicRead": public_read,
+        "publicWrite": false, "publishPolicy": true, "publishMembers": publish_members });
+    pds.post(
+        "com.atproto.space.createSpace",
+        &json!({ "spaceType": SPACE_TYPE, "skey": space.skey(), "policy": policy }),
+        &owner.auth(),
+    )?
+    .ok("createSpace misconfigured profile")?;
+    if let Some(m) = member {
+        pds.post(
+            "com.atproto.memberspace.putMembers",
+            &json!({ "space": s, "members": [{ "did": m.did, "read": true, "write": false }] }),
+            &owner.auth(),
+        )?
+        .ok("putMembers misconfigured profile")?;
+    }
+    let record = json!({ "$type": PROFILE, "displayName": "Secret",
+        "audiences": [{ "$type": umbrae_lexicons::AUDIENCE_EVERYONE }], "createdAt": CREATED });
+    pds.post(
+        "com.atproto.space.putRecord",
+        &json!({ "space": s, "repo": owner.did, "collection": PROFILE,
+            "rkey": SELF_RKEY, "record": record }),
+        &owner.auth(),
+    )?
+    .ok("putRecord misconfigured profile")?;
+    let synced = sync(pds, dir, &space, owner, None)?;
+    let state = state_of(&space, &synced);
+    let uri = space
+        .record(&owner.did, PROFILE, SELF_RKEY)
+        .map_err(|e| e.to_string())?;
+    let profile = umbrae_records(&space, &synced)
+        .into_iter()
+        .find_map(|(u, v)| match v {
+            Ok(Some(Record::Profile(p))) if u == uri => Some(*p),
+            _ => None,
+        })
+        .ok_or("no misconfigured profile")?;
+    Ok((space, state, profile))
 }

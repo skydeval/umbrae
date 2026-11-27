@@ -216,7 +216,9 @@ pub(crate) fn profile(m: &Map, uri: &SpaceRecordUri) -> Result<Profile, Invalid>
 
 /// The audience list. Required; may be empty (the owner alone). Groups
 /// must be the owner's own; duplicates and malformed entries refuse;
-/// unknown types are dropped.
+/// unknown types are dropped when read, so they grant nothing. A client
+/// edits the raw record, writing back entries it doesn't know unchanged:
+/// rebuilding the record from the parsed [`Profile`] would delete them.
 fn audiences(v: Option<&Value>, owner: &str) -> Result<Vec<Audience>, Invalid> {
     let Some(Value::Array(items)) = v else {
         return Err(Invalid("the profile lists its audiences"));

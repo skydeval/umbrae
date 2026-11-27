@@ -1,0 +1,49 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.actor.getProfile",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "An account's hidden profile, for a viewer in one of its listed audiences. Served by the viewer's serving app at its #umbrae_app endpoint, with atproto service auth (iss the viewer, aud the serving app, lxm this method); clients call through their PDS with atproto-proxy set to that app. The app answers only for profiles whose owner delegates to it, and never returns the audience list to anyone but the owner.",
+      "parameters": {
+        "type": "params",
+        "required": [
+          "actor"
+        ],
+        "properties": {
+          "actor": {
+            "type": "string",
+            "format": "did",
+            "description": "The profile's owner."
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "did",
+            "profile"
+          ],
+          "properties": {
+            "did": {
+              "type": "string",
+              "format": "did"
+            },
+            "profile": {
+              "type": "unknown",
+              "description": "The tools.umbrae.profile record value, with its blob refs, without audiences (unless the viewer is the owner). Fetch its blobs with tools.umbrae.actor.getProfileBlob."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "ProfileNotFound",
+          "description": "No profile, not one the viewer may see, or not one this app holds. The same answer for all three."
+        }
+      ]
+    }
+  }
+}

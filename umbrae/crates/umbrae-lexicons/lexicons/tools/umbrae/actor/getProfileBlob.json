@@ -1,0 +1,41 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.actor.getProfileBlob",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "A blob of an account's hidden profile (avatar, banner or link icon), for a viewer who may see the profile. Served and authenticated as tools.umbrae.actor.getProfile. The app serves a blob only if the profile refers to it; the viewer checks the bytes against the CID.",
+      "parameters": {
+        "type": "params",
+        "required": [
+          "actor",
+          "cid"
+        ],
+        "properties": {
+          "actor": {
+            "type": "string",
+            "format": "did",
+            "description": "The profile's owner."
+          },
+          "cid": {
+            "type": "string",
+            "format": "cid"
+          }
+        }
+      },
+      "output": {
+        "encoding": "*/*"
+      },
+      "errors": [
+        {
+          "name": "ProfileNotFound",
+          "description": "As for tools.umbrae.actor.getProfile."
+        },
+        {
+          "name": "BlobNotFound",
+          "description": "The profile doesn't refer to this blob, or the app can't fetch it."
+        }
+      ]
+    }
+  }
+}

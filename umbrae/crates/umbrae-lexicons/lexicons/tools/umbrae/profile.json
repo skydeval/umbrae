@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "record",
-      "description": "An account's hidden profile: one record, at key self in the owner's profile space (key profile, a memberspace with no members), listing the audiences that may see it. Only the owner and its serving app read the record; the serving app shows it, and serves its blobs, to anyone in a listed audience, and never shows the audience list to anyone but the owner. Legacy (0.7.0 to 0.7.2): one copy per audience at self in a followers, group, everyone or community space, without audiences; read only while the owner has no profile-space record. Blobs are fetched through space getBlob, never publicly.",
+      "description": "An account's hidden profile: one record, at key self in the owner's profile space (key profile, a memberspace with no members), listing the audiences that may see it. Only the owner and its serving app read the record; the serving app shows it, and serves its blobs, to anyone in a listed audience, and never shows the audience list to anyone but the owner and moderation. Others read it through tools.umbrae.actor.getProfile and getProfileBlob. The profile space's policy must pass the group rules (members published, not public) and its member list must be empty, or the profile shows to nobody. Clients keep audience entries they don't know when editing. Legacy (0.7.0 to 0.7.2): one copy per audience at self in a followers, group, everyone or community space, without audiences; read only until the owner has, or has deleted, a profile space. Blobs are fetched through space getBlob, never publicly.",
       "key": "literal:self",
       "record": {
         "type": "object",
@@ -97,7 +97,7 @@
           "updatedAt": {
             "type": "string",
             "format": "datetime",
-            "description": "When this copy last changed."
+            "description": "When the record last changed."
           },
           "audiences": {
             "type": "array",

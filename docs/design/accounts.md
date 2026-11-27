@@ -16,7 +16,7 @@ Follow requests are the app's business and never public. Approving a request is 
 
 The avatar, banner and link icons are blobs referenced only from the profile space:
 - the owner fetches them with space `getBlob` and its own session; the serving app, with its credential for the profile space. Both check the CID;
-- everyone else gets them from the serving app, which serves a blob only to someone who may see the profile and only if the profile refers to it;
+- everyone else gets them through `tools.umbrae.actor.getProfileBlob` from their serving app, which serves a blob only to someone who may see the profile and only if the profile refers to it;
 - the public `sync.getBlob` doesn't serve them.
 
 ## Hidden follows

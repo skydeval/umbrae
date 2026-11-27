@@ -10,16 +10,20 @@
 //! - **everyone:** anyone the serving app admits.
 //!
 //! Every audience sees the same record, so an edit reaches all of them at
-//! once. The audience list itself is for the owner only: a serving app
-//! never returns it to anyone else.
+//! once. The audience list is for the owner and moderation only: a serving
+//! app never returns it to anyone else. Others read the profile through
+//! their serving app's `tools.umbrae.actor.getProfile` and
+//! `getProfileBlob`. After every write to the profile space, the owner's
+//! client hands the serving app a fresh delegation so it re-syncs.
 //!
 //! Before 0.7.3 a profile had one copy per audience. Those copies are
 //! legacy: read them with [`crate::community::profile_for_viewer`] only
-//! while the owner has no profile-space record. On the next save a client
-//! writes the one record and deletes the copies.
+//! until the owner has, or has deleted, a profile space. Migration lists
+//! only the audiences whose copy matches the newest, and the owner
+//! confirms before the copies are deleted.
 
 use crate::access::{can_view_record, can_view_space, is_writer, SpaceState, Tri, ViewContext};
-use crate::space::followers_space;
+use crate::space::{check_policy, followers_space};
 use umbrae_core::cid::Cid;
 use umbrae_core::uri::{SpaceRecordUri, SpaceRef};
 use umbrae_lexicons::{Audience, Profile, PROFILE, PROFILE_SKEY, SELF_RKEY};
@@ -34,7 +38,10 @@ pub trait AudienceSource {
 }
 
 /// Whether `uri` is the owner's one profile, in a sound profile space: at
-/// `self`, by the space's authority, and the space has no members.
+/// `self`, by the space's authority, the policy known and passing
+/// [`check_policy`] (so the member list is published and nobody reads it
+/// publicly), and the published member list empty. Then no member can
+/// exist unseen.
 fn is_sound(uri: &SpaceRecordUri, profile_space: &SpaceState) -> bool {
     let space = uri.space();
     space.skey() == PROFILE_SKEY
@@ -42,13 +49,19 @@ fn is_sound(uri: &SpaceRecordUri, profile_space: &SpaceState) -> bool {
         && uri.rkey() == SELF_RKEY
         && uri.author() == space.authority()
         && profile_space.space == *space
+        && profile_space
+            .policy
+            .as_ref()
+            .is_some_and(|p| check_policy(space, p).is_ok())
         && profile_space.members.is_empty()
 }
 
-/// Whether `viewer` may see the profile at `uri`. The owner always may;
-/// anyone else must be in a listed audience, active, and not blocking or
-/// blocked by the owner. A profile space with members, or a record that
-/// isn't the owner's profile, shows to nobody.
+/// Whether `viewer` may see the profile at `uri`. The owner may; anyone
+/// else must be in a listed audience, active, and not blocking or blocked
+/// by the owner. A profile space whose policy fails `check_policy` or that
+/// has members, or a record that isn't the owner's profile, shows to
+/// nobody, the owner included, so the owner's client notices and repairs
+/// it.
 pub fn can_view_profile(
     viewer: Option<&str>,
     uri: &SpaceRecordUri,
@@ -356,6 +369,42 @@ mod tests {
             &src,
             &OK
         ));
+    }
+
+    #[test]
+    fn a_profile_space_with_the_wrong_policy_shows_to_nobody() {
+        use umbrae_core::policy::{MemberPolicy, Policy};
+        let p = parse(&record(vec![audience(AUDIENCE_EVERYONE, None)]));
+        let src = Source {
+            states: vec![],
+            admitted: vec![BOB],
+        };
+        let member = |public_read, publish_members| {
+            Policy::Member(MemberPolicy {
+                public_read,
+                public_write: false,
+                allowed_apps: None,
+                publish_policy: true,
+                publish_members,
+            })
+        };
+        let home = profile_space(ALICE).unwrap();
+        // Unpublished members (a hidden member reads it), public read, and a
+        // managed policy: each refused for the owner and for an admitted viewer.
+        for space in [
+            state(home.clone(), member(false, false), &[]),
+            state(home.clone(), member(true, true), &[]),
+            state(home.clone(), managed_policy(APP), &[]),
+            SpaceState::new(home.clone(), None),
+        ] {
+            for v in [ALICE, BOB] {
+                assert!(
+                    !can_view_profile(Some(v), &uri(), &p, &space, &src, &OK),
+                    "{v} {:?}",
+                    space.policy
+                );
+            }
+        }
     }
 
     #[test]

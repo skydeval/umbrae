@@ -44,7 +44,7 @@ A community's managing app serves `tools.umbrae.community.*` at the `#umbrae_app
 
 - **Membership:** the managing app keeps it, so no member list sits in a repo.
 - **Sync:** the serving app syncs each writer's repo once and serves members from its own copy. Sync load grows with the number of apps syncing, not with the number of readers.
-- **Reader state:** a reader's `SpaceState` takes its `members` from the managing app's answers. It needs only the accounts in question, such as the viewer and the authors on screen, not the whole membership.
+- **Reader state:** a reader's `SpaceState` takes its `members` from the managing app's answers. It needs only the accounts in question, such as the viewer, the authors on screen and the owner of a profile shown there, not the whole membership.
 
 ## Removal
 
@@ -64,8 +64,11 @@ Feeds are author-driven: there's no algorithm.
 ## One profile, many audiences
 
 An account has **one** hidden profile, so an edit reaches every audience at once:
-- **Where it lives:** `tools.umbrae.profile` at `self` in the owner's profile space, `tools.umbrae.space` with the key `profile` (`profile_space`). The space takes the group policy and has **no members**.
-- **Who reads the record:** the owner, and the serving app the owner delegates to. Nobody else can read the space, so nobody else sees the audience list, and a serving app never returns it to anyone but the owner.
+- **Where it lives:** `tools.umbrae.profile` at `self` in the owner's profile space, `tools.umbrae.space` with the key `profile` (`profile_space`).
+  - The space is created with `group_policy`, whose `allowed_apps` may limit which serving apps read it.
+  - It has **no members**: the owner reads it as authority, and a client never calls `putMembers` on it.
+  - Only the profile belongs there. Readers ignore any other record in it.
+- **Who reads the record:** the owner, and the serving apps the owner delegates to. Anyone else's delegation is refused as `SpaceNotFound`. So nobody else sees the audience list, and a serving app returns it only to the owner and to moderation.
 - **Who sees the profile:** the record lists its `audiences`. The serving app shows the profile, and serves its blobs, to anyone in one of them (`can_view_profile`, `can_view_profile_blob`):
 
 | Audience | `$type` | Who's in it |
@@ -79,17 +82,53 @@ An account has **one** hidden profile, so an edit reaches every audience at once
   - an empty list shows the profile to the owner alone, and deleting the record turns it off;
   - turning an audience off is an edit to the list;
   - blocks cut either way;
-  - an audience type a reader doesn't know grants nothing;
-  - a profile space with any members shows the profile to nobody, because members could read the list and get past it.
-- **Without a serving app:** a group member's client can't read the profile space, so it asks the serving app for the profile.
+  - an audience type a reader doesn't know grants nothing, and a client editing the record writes such entries back unchanged;
+  - a community audience needs the managing app's answer for the owner as well as the viewer;
+  - **a sound profile space:** its policy must pass `check_policy` (members published, not public) and its published member list must be empty. Otherwise the profile shows to nobody, the owner included, so the owner's client notices and repairs it. Members, seen or not, could read the list and get past it.
 
 A profile never lives in only-me, because nobody else can read only-me, the serving app included.
 
+### Reading someone's profile
+
+A serving app answers two queries, with the same service auth and `atproto-proxy` routing as `tools.umbrae.community.*`:
+
+| Method | Params | Answer |
+|---|---|---|
+| `tools.umbrae.actor.getProfile` | `actor` | the profile, with its blob refs, without `audiences` |
+| `tools.umbrae.actor.getProfileBlob` | `actor`, `cid` | the blob's bytes |
+
+- **Errors:** `ProfileNotFound` is the same answer for no profile, not allowed, and a profile the app doesn't hold. `BlobNotFound` is for a blob, on the same terms.
+- **Which app:** the viewer's own serving app. A profile reaches the viewers whose app the owner delegates to. There's no discovery record.
+- **Group members:** a group member's client can't read the profile space, so this is the only way it sees the profile.
+
+### Keeping the serving app current
+
+- **No standing access:** a delegation token is single-use and lasts 60 seconds, and a space credential lasts 10 minutes by default. Only the owner's delegation works for the profile space, so a serving app holds whatever it last synced.
+- **After every write** to the profile space (create, edit, delete), the owner's client hands each serving app it uses a fresh delegation for the profile space, plus the followers space and listed groups if the app lacks them. The app re-syncs before answering for that profile again.
+- **Or the app fetches them itself:** a serving app holding the owner's OAuth session, with read scope on the profile space, fetches delegations on its own.
+- **Otherwise:** a write reaches the app only at its next sync. Blocks, account state and audience membership are checked live, so they're never delayed.
+
+### Moderation
+
+Hidden means hidden from the public and outsiders, not from moderators. The serving app makes a profile available to moderation the same way as hidden posts:
+- to a community's moderation service, for each community the profile is currently shown to;
+- to its own moderation for every other audience.
+
+Moderators get the profile, its blobs and the audiences it's shown to. They're never members of the profile space.
+
 ### Moving from copies
 
-0.7.0 to 0.7.2 kept one copy per audience. Those copies drifted apart, because an edit reached only the copy being edited. They're now legacy:
-- **Readers:** use the profile-space record when there is one, and ignore the copies. Until then, fall back to `profile_for_viewer` over the copies.
-- **Clients:** on the next save, write the one record from the newest copy, keep any avatar or banner (and its alt text) that only an older copy has, list the audiences the copies were in, then delete the copies.
+0.7.0 to 0.7.2 kept one copy per audience. Those copies drifted apart, because an edit reached only the copy being edited. They're now legacy.
+
+- **Readers:**
+  - Once the owner **has, or has deleted, a profile space**, ignore every copy, whether or not the record exists. A deleted space leaves a tombstone (`authorizeSpaceSync` answers `SpaceDeleted`), so deleting it doesn't bring copies back.
+  - Before that, fall back to `profile_for_viewer` over the copies.
+- **Clients:** migration never shows anyone something they couldn't see before.
+  1. Take the newest copy's content (by `updatedAt`, else `createdAt`).
+  2. List only the audiences whose copy has the same content: every field equal except `createdAt` and `updatedAt`. Carry nothing over from a copy with different content, blobs included.
+  3. Create the profile space, write the record, and hand the serving app a delegation.
+  4. Show the owner which audiences no longer see a profile, and let them add those audiences explicitly.
+  5. Once the owner confirms, delete every copy, retrying until all are gone. A blob a copy shares with the new record stays.
 - **Validation:** copies still validate, without `audiences`. A record outside the profile space that lists audiences is refused.
 
 ## Shareable lists

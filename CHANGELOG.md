@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-11-27
+
+### Fixed
+- `can_view_profile` showed a profile whose profile space failed `check_policy`: one with an unpublished member list (a member the reader can't see reads it directly), public read, or a managed policy. Now such a space shows the profile to nobody, the owner included.
+
+### Added
+- `tools.umbrae.actor.getProfile` and `tools.umbrae.actor.getProfileBlob`: how a viewer reads a hidden profile and its blobs through their serving app, with service auth and `atproto-proxy`. `ProfileNotFound` answers alike for none, not allowed and not held. `ACTOR_GET_PROFILE` and `ACTOR_GET_PROFILE_BLOB`.
+- Keeping the serving app current: after every write to the profile space, the owner's client hands the serving app a fresh delegation, or the app fetches its own with read scope on the profile space.
+- Hidden profiles reach moderation the same way as hidden posts, with the audiences they're shown to.
+- OAuth scopes for writing the profile and for a serving app that fetches profile delegations itself.
+- Interop coverage: a non-owner's delegation for a profile space is refused as `SpaceNotFound`; deleting a legacy copy keeps the shared avatar in the profile space and off the public side; profile spaces with an unpublished member list, or public read, show to nobody.
+
+### Changed
+- Migration from copies: list only the audiences whose copy matches the newest content, carry nothing over from a copy that differs, and let the owner confirm before the copies are deleted. 0.7.3 merged pictures across copies, which could show one audience's face to another.
+- Readers ignore legacy copies once the owner has, or has deleted, a profile space, not just while a record exists, so deleting the record doesn't bring the copies back.
+- Clients editing a profile keep audience entries they don't know.
+
 ## [0.7.3] - 2026-11-27
 
 ### Added
@@ -188,7 +205,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/skydeval/umbrae/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/skydeval/umbrae/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/skydeval/umbrae/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/skydeval/umbrae/compare/v0.7.0...v0.7.1

@@ -90,6 +90,9 @@ pub const COMMUNITY_REMOVE: &str = "tools.umbrae.community.remove";
 /// A community's public declaration of its managing app, at `self` in its
 /// public repo.
 pub const COMMUNITY_DECLARATION: &str = "tools.umbrae.community.declaration";
+/// Reading a hidden profile through the viewer's serving app.
+pub const ACTOR_GET_PROFILE: &str = "tools.umbrae.actor.getProfile";
+pub const ACTOR_GET_PROFILE_BLOB: &str = "tools.umbrae.actor.getProfileBlob";
 /// The followers space's key: a private account's approved followers.
 pub const FOLLOWERS_SKEY: &str = "followers";
 /// A community's space key: the space whose authority is the community's
@@ -98,8 +101,9 @@ pub const COMMUNITY_SKEY: &str = "community";
 /// An account's "everyone with Umbrae" space key.
 pub const EVERYONE_SKEY: &str = "everyone";
 /// An account's profile space key: the one space that holds its hidden
-/// profile. The owner is its only member; the serving app reads it on the
-/// owner's delegation and shows the profile to the audiences it lists.
+/// profile. It has no members; the owner reads it as authority, and the
+/// serving app on the owner's delegation, showing the profile to the
+/// audiences it lists.
 pub const PROFILE_SKEY: &str = "profile";
 /// The space type of a shared list.
 pub const LIST_SPACE_TYPE: &str = "tools.umbrae.listSpace";
@@ -212,6 +216,14 @@ pub const LEXICONS: &[(&str, &str)] = &[
     (
         COMMUNITY_DECLARATION,
         include_str!("../lexicons/tools/umbrae/community/declaration.json"),
+    ),
+    (
+        ACTOR_GET_PROFILE,
+        include_str!("../lexicons/tools/umbrae/actor/getProfile.json"),
+    ),
+    (
+        ACTOR_GET_PROFILE_BLOB,
+        include_str!("../lexicons/tools/umbrae/actor/getProfileBlob.json"),
     ),
 ];
 

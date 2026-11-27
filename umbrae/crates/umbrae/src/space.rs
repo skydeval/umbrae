@@ -14,7 +14,8 @@
 //! and the apps it delegates to (its serving app) read it; the serving app
 //! shows the profile to the audiences the record lists. Members would read
 //! the audience list and bypass it, so a reader refuses a profile space
-//! that has any (see [`crate::profile`]).
+//! that has any members, or whose policy fails [`check_policy`] (see
+//! [`crate::profile`]). A client never calls `putMembers` on it.
 //!
 //! A managed space's membership is held by its managing app, which the
 //! PDS asks through `com.atproto.managedspace.checkAccess`. That app may be
@@ -65,8 +66,8 @@ pub fn everyone_space(owner: &str) -> Result<SpaceRef, UriError> {
     SpaceRef::new(owner, SPACE_TYPE, EVERYONE_SKEY)
 }
 
-/// An account's profile space. It takes the group policy and has no
-/// members; `allowed_apps` limits which serving apps may read it.
+/// An account's profile space. Create it with [`group_policy`], whose
+/// `allowed_apps` limits which serving apps may read it, and add no members.
 pub fn profile_space(owner: &str) -> Result<SpaceRef, UriError> {
     SpaceRef::new(owner, SPACE_TYPE, PROFILE_SKEY)
 }
