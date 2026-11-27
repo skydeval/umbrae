@@ -4,8 +4,10 @@
 #   PRISM_UPSTREAM=http://<prism container>:<port> sh scripts/prism-harness.sh up
 #   sh scripts/prism-harness.sh down
 #
-# `up` starts, on the private Docker network umbrae-prism:
-# - the reference PDS at http://pds.interop.test:3000;
+# `up` starts, on the Docker network umbrae-prism ($NET_SUBNET, by default
+# 198.18.7.0/24, outside the private ranges):
+# - the reference PDS at https://pds.interop.test, as its DID documents
+#   name it, and at http://pds.interop.test:3000;
 # - the mock PLC directory at http://umbrae-prism-harness:2582, which the
 #   app under test must use too;
 # - a TLS front at https://$PRISM_HOST, signed by a throwaway CA the PDS
@@ -29,6 +31,8 @@ IMAGE=ghcr.io/bluesky-social/atproto:pds-spaces-alpha
 RUST=rust:1.90-bookworm
 NGINX=nginx:1.27-alpine
 PDS_HOST=pds.interop.test
+PDS_BACKEND=umbrae-prism-pds-backend
+NET_SUBNET=${NET_SUBNET:-198.18.7.0/24}
 PRISM_HOST=${PRISM_HOST:-prism.interop.test}
 PRISM_SERVICE=${PRISM_SERVICE:-umbrae_app}
 PRISM_KEY=${PRISM_KEY:-interop}
@@ -71,7 +75,7 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
 	-keyout "$STATE_DIR/ca.key" -out "$STATE_DIR/ca.pem" -days 7 -subj "/CN=prism harness CA" 2>/dev/null || exit 1
 openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
 	-keyout "$STATE_DIR/front.key" -out "$STATE_DIR/front.csr" -subj "/CN=$PRISM_HOST" 2>/dev/null || exit 1
-printf 'subjectAltName=DNS:%s\n' "$PRISM_HOST" >"$STATE_DIR/ext"
+printf 'subjectAltName=DNS:%s,DNS:%s\n' "$PRISM_HOST" "$PDS_HOST" >"$STATE_DIR/ext"
 openssl x509 -req -in "$STATE_DIR/front.csr" -CA "$STATE_DIR/ca.pem" -CAkey "$STATE_DIR/ca.key" \
 	-CAcreateserial -out "$STATE_DIR/front.pem" -days 7 -extfile "$STATE_DIR/ext" 2>/dev/null || exit 1
 cat >"$STATE_DIR/nginx.conf" <<EOF
@@ -89,18 +93,40 @@ server {
 		proxy_set_header X-Forwarded-Proto https;
 	}
 }
+# The PDS, as its DID documents name it (https on 443), and on plain 3000
+# for the harness.
+server {
+	listen 443 ssl;
+	listen 3000;
+	server_name $PDS_HOST;
+	ssl_certificate /certs/front.pem;
+	ssl_certificate_key /certs/front.key;
+	client_max_body_size 100m;
+	resolver 127.0.0.11 valid=10s;
+	set \$pds http://$PDS_BACKEND:3000;
+	location / {
+		proxy_pass \$pds;
+		proxy_set_header Host $PDS_HOST;
+		proxy_set_header X-Forwarded-Proto \$scheme;
+		proxy_http_version 1.1;
+		proxy_set_header Upgrade \$http_upgrade;
+		proxy_set_header Connection "upgrade";
+	}
+}
 EOF
 
-docker network create "$NET" >/dev/null || exit 1
+# Outside the private ranges, so an app that refuses private addresses can
+# still reach the PDS and the PLC directory.
+docker network create --subnet "$NET_SUBNET" "$NET" >/dev/null || exit 1
 echo "== image $(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")"
 
-docker run -d --name "$FRONT" --network "$NET" --network-alias "$PRISM_HOST" \
+docker run -d --name "$FRONT" --network "$NET" --network-alias "$PRISM_HOST" --network-alias "$PDS_HOST" \
 	-v "$STATE_DIR/nginx.conf":/etc/nginx/conf.d/default.conf:ro \
 	-v "$STATE_DIR/front.pem":/certs/front.pem:ro \
 	-v "$STATE_DIR/front.key":/certs/front.key:ro \
 	"$NGINX" >/dev/null || { down; exit 1; }
 
-docker run -d --name "$PDS" --network "$NET" --network-alias "$PDS_HOST" \
+docker run -d --name "$PDS" --network "$NET" --network-alias "$PDS_BACKEND" \
 	-v "$STATE_DIR/ca.pem":/interop-ca.pem:ro \
 	-e NODE_EXTRA_CA_CERTS=/interop-ca.pem \
 	-e PDS_HOSTNAME="$PDS_HOST" \
@@ -150,5 +176,5 @@ while [ ! -s "$STATE_DIR/out/prism-fixture.json" ]; do
 done
 cat "$STATE_DIR/out/prism-fixture.json"
 echo
-echo "== up: network $NET, PDS http://$PDS_HOST:3000, PLC http://$HARNESS:2582, front https://$PRISM_HOST -> $PRISM_UPSTREAM"
+echo "== up: network $NET ($NET_SUBNET), PDS https://$PDS_HOST and http://$PDS_HOST:3000, PLC http://$HARNESS:2582, front https://$PRISM_HOST -> $PRISM_UPSTREAM"
 echo "== CA for the app to trust, if it calls its own front: $STATE_DIR/ca.pem; PDS log: docker logs $PDS"
