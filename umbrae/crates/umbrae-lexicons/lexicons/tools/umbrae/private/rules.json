@@ -33,13 +33,17 @@
           "updatedAt": {
             "type": "string",
             "format": "datetime"
+          },
+          "approvalsInSpace": {
+            "type": "boolean",
+            "description": "True: approvedFollowers is the owner's tools.umbrae.private.approval records only. Absent or false: an account made private before approvals may still be migrating from its followers space; the client copies those members into approvals once, then sets this in the same write as the last batch."
           }
         }
       }
     },
     "approvedFollowers": {
       "type": "object",
-      "description": "Members of the owner's followers space (a tools.umbrae.space at key followers). Following publicly grants nothing.",
+      "description": "Accounts the owner approved: at least one tools.umbrae.private.approval by the owner in this space names them. Following publicly grants nothing.",
       "properties": {}
     },
     "following": {

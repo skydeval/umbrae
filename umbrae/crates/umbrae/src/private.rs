@@ -31,8 +31,13 @@
 //! label counts only from an account the app lists in `label_writers` (the
 //! writer set minus the owner), where the reader trusts it as a labeler.
 //!
+//! Approved followers are the owner's approvals in the private space
+//! ([`approved_followers`]), which the app syncs with its own attestation,
+//! so a change reaches it while the owner is offline. Only the owner and the
+//! app read them, and the app never serves them, or the rules, to viewers.
+//!
 //! Going public moves the owner's records back, except those that must
-//! stay: the rules, every record by another account, and any owner's record that
+//! stay: the rules and approvals, every record by another account, and any owner's record that
 //! names, even through another, a record that stays ([`stays_private`]).
 //! What goes public has its own `at:space` references rewritten to the
 //! public form ([`going_public_value`]).
@@ -43,8 +48,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use umbrae_core::drisl::Value;
 use umbrae_core::uri::{contains_space_uri, SpaceRecordUri, SpaceRef};
 use umbrae_lexicons::{
-    PublicUri, Rule, Rules, Target, BSKY_LIST, PRIVATE_COLLECTIONS, PRIVATE_RULES,
-    PRIVATE_SPACE_TYPE, SELF_RKEY,
+    validate_private_record, PrivateRecord, PublicUri, Rule, Rules, Target, BSKY_LIST,
+    PRIVATE_APPROVAL, PRIVATE_COLLECTIONS, PRIVATE_RULES, PRIVATE_SPACE_TYPE, SELF_RKEY,
 };
 
 type Map = BTreeMap<String, Value>;
@@ -52,9 +57,10 @@ type Map = BTreeMap<String, Value>;
 /// What the serving app knows for the rules. Each answer is `Unknown` when
 /// the app can't say right now, and then it grants nothing.
 pub trait PrivateInputs {
-    /// Whether `viewer` is a member of `owner`'s followers space, from the
-    /// app's current state of it, kept on the owner's grant. `Unknown`
-    /// without a current state.
+    /// Whether `owner` approved `viewer`: at least one of the owner's
+    /// approvals in its private space names them ([`approved_followers`]),
+    /// from the app's current sync of the space, made with its own
+    /// attestation. `Unknown` without a current state.
     fn approved_follower(&self, owner: &str, viewer: &str) -> Tri;
     /// Whether `a` follows `b` publicly (`app.bsky.graph.follow`).
     fn follows(&self, a: &str, b: &str) -> Tri;
@@ -121,6 +127,26 @@ pub fn interaction_counts(
     }
     let owner = space.authority();
     uri.author() == owner || can_view_private(Some(uri.author()), owner, rules, inputs, ctx)
+}
+
+/// The owner's approved followers: the subjects of the owner's valid
+/// `tools.umbrae.private.approval` records in private space `space`.
+/// Another author's approvals, which a tracked writer can put there, count
+/// for nothing; so do invalid ones and records of any other space. Several
+/// approvals of one account are harmless: it stays approved until the last
+/// is deleted.
+pub fn approved_followers<'a>(
+    space: &SpaceRef,
+    records: impl IntoIterator<Item = (&'a SpaceRecordUri, &'a Map)>,
+) -> BTreeSet<String> {
+    records
+        .into_iter()
+        .filter(|(uri, _)| uri.space() == space && uri.collection() == PRIVATE_APPROVAL)
+        .filter_map(|(uri, value)| match validate_private_record(uri, value) {
+            Ok(Some(PrivateRecord::Approval(a))) => Some(a.subject),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The records of private space `space` that stay in it when the owner goes
@@ -235,7 +261,7 @@ mod tests {
     use crate::space::{private_space, public_uri};
     use umbrae_core::cid::Cid;
     use umbrae_core::scope::SpacePermission;
-    use umbrae_lexicons::{validate_private_record, PrivateRecord, BSKY_LIKE, BSKY_POST};
+    use umbrae_lexicons::{BSKY_LIKE, BSKY_POST};
 
     const ALICE: &str = "did:plc:aliceaaaaaaaaaaaaaaaaaaa";
     const BOB: &str = "did:plc:bobbbbbbbbbbbbbbbbbbbbbb";
@@ -630,6 +656,56 @@ mod tests {
         }
     }
 
+    fn approval_of(subject: &str) -> Map {
+        map(&[
+            ("$type", t(PRIVATE_APPROVAL)),
+            ("subject", t(subject)),
+            ("createdAt", t(NOW)),
+        ])
+    }
+
+    #[test]
+    fn approved_followers_are_the_owners_approvals() {
+        let space = private_space(ALICE).unwrap();
+        let at = |author: &str, rkey: &str| space.record(author, PRIVATE_APPROVAL, rkey).unwrap();
+        // Bob twice, Carol once; Bob (a writer) approving Dan; Alice
+        // "approving" herself; a malformed one; Dan approved in Bob's space.
+        let bobs_space = private_space(BOB).unwrap();
+        let in_bobs = bobs_space
+            .record(BOB, PRIVATE_APPROVAL, "3mbqaaaaaaa2a")
+            .unwrap();
+        let mut records = vec![
+            (at(ALICE, "3mbqaaaaaaa22"), approval_of(BOB)),
+            (at(ALICE, "3mbqaaaaaaa23"), approval_of(BOB)),
+            (at(ALICE, "3mbqaaaaaaa24"), approval_of(CAROL)),
+            (at(BOB, "3mbqaaaaaaa25"), approval_of(DAN)),
+            (at(ALICE, "3mbqaaaaaaa26"), approval_of(ALICE)),
+            (at(ALICE, "3mbqaaaaaaa27"), approval_of("not a did")),
+            (in_bobs, approval_of(DAN)),
+            (
+                space.record(ALICE, BSKY_POST, "3mbqaaaaaaa28").unwrap(),
+                map(&[
+                    ("$type", t(BSKY_POST)),
+                    ("text", t("hi")),
+                    ("createdAt", t(NOW)),
+                ]),
+            ),
+        ];
+        let set = |rs: &[(SpaceRecordUri, Map)]| {
+            approved_followers(&space, rs.iter().map(|(u, v)| (u, v)))
+        };
+        assert_eq!(set(&records), BTreeSet::from([BOB.into(), CAROL.into()]));
+        // Bob stays approved until his last approval goes.
+        records.remove(0);
+        assert!(set(&records).contains(BOB));
+        records.remove(0);
+        assert_eq!(set(&records), BTreeSet::from([CAROL.into()]));
+        // Approvals stay inside when the owner goes public.
+        let stay = stays_private(&space, records.iter().map(|(u, v)| (u, v)));
+        assert!(stay.contains(&at(ALICE, "3mbqaaaaaaa24")));
+        assert!(!stay.contains(&space.record(ALICE, BSKY_POST, "3mbqaaaaaaa28").unwrap()));
+    }
+
     #[test]
     fn going_public_rewrites_the_owners_references() {
         let space = private_space(ALICE).unwrap();
@@ -654,10 +730,21 @@ mod tests {
 
     #[test]
     fn the_scopes_parse() {
-        let owner = "space:tools.umbrae.private?collection=app.bsky.feed.post&collection=app.bsky.feed.repost&collection=app.bsky.feed.like&collection=app.bsky.feed.threadgate&collection=app.bsky.feed.postgate&collection=tools.umbrae.private.rules&manage=create&manage=update&manage=delete";
+        let owner = "space:tools.umbrae.private?collection=app.bsky.feed.post&collection=app.bsky.feed.repost&collection=app.bsky.feed.like&collection=app.bsky.feed.threadgate&collection=app.bsky.feed.postgate&collection=tools.umbrae.private.rules&collection=tools.umbrae.private.approval&manage=create&manage=update&manage=delete";
         let others = "space:tools.umbrae.private?authority=*&collection=app.bsky.feed.post&collection=app.bsky.feed.repost&collection=app.bsky.feed.like&collection=app.bsky.feed.postgate";
         for s in [owner, others] {
             assert!(SpacePermission::parse(s).is_some(), "{s}");
         }
+        // Only the owner's scope writes approvals.
+        let writes_approvals = |s: &str| {
+            SpacePermission::parse(s)
+                .and_then(|p| p.collection)
+                .is_some_and(|c| {
+                    c.iter()
+                        .any(|x| matches!(x, umbrae_core::scope::Pattern::Is(n) if n == PRIVATE_APPROVAL))
+                })
+        };
+        assert!(writes_approvals(owner));
+        assert!(!writes_approvals(others));
     }
 }

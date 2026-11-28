@@ -7,7 +7,10 @@
 //! `checkAccess`; with `repo` absent, `read` for its own attested client
 //! only; with `repo` set, never `read`, and `write` while that account
 //! passes Alice's rules (`can_view_private`). Her rules admit approved
-//! followers: Bob, until he's removed. Carol is outside.
+//! followers: Bob, from Alice's approval until she deletes it. Carol is
+//! outside. The app knows the approvals only from its own syncs of the
+//! private space, made with its attestation and no delegation, and
+//! `approved_followers`; notifications tell it when to sync.
 //!
 //! Alice's public history moves in as a client's mover moves it, looking up
 //! each space copy first. Bob and Carol interact, Bob loses access, and
@@ -30,7 +33,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 use umbrae::placement::{leaks_hidden, like_space, reply_space};
 use umbrae::private::{
-    can_view_private, going_public_value, interaction_counts, stays_private, PrivateInputs,
+    approved_followers, can_view_private, going_public_value, interaction_counts, stays_private,
+    PrivateInputs,
 };
 use umbrae::space::{check_private_policy, private_space, private_uri, public_uri};
 use umbrae::{Tri, ViewContext, PRIVATE_SPACE_TYPE};
@@ -39,7 +43,8 @@ use umbrae_core::didkey;
 use umbrae_core::uri::{SpaceRecordUri, SpaceRef};
 use umbrae_lexicons::{
     validate_private_record, PrivateRecord, PublicUri, Rule, Rules, Target, BSKY_LIKE, BSKY_POST,
-    BSKY_REPOST, BSKY_THREADGATE, PRIVATE_RULES, PRIVATE_RULE_APPROVED_FOLLOWERS, SELF_RKEY,
+    BSKY_REPOST, BSKY_THREADGATE, PRIVATE_APPROVAL, PRIVATE_RULES, PRIVATE_RULE_APPROVED_FOLLOWERS,
+    SELF_RKEY,
 };
 use umbrae_sync::{check, Checked};
 
@@ -63,7 +68,8 @@ struct Call {
     answer: (bool, bool),
 }
 
-/// Alice's approved followers, as the app holds them.
+/// Alice's approved followers, as the app derived them from its last sync
+/// ([`learn_approvals`]). Never set by hand.
 static ALLOWED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 /// Alice's rules, as the app read them from her space.
 static RULES: Mutex<Option<Rules>> = Mutex::new(None);
@@ -435,17 +441,65 @@ fn checked(space: &SpaceRef, s: &Synced) -> Vec<(SpaceRecordUri, Checked)> {
     out
 }
 
-/// The records the app shows now: valid, and counting under the rules.
+/// The records the app shows now: valid, counting under the rules, and
+/// never the rules or approvals, which are for the owner and the app.
 fn shown(space: &SpaceRef, s: &Synced) -> BTreeSet<SpaceRecordUri> {
     let rules = RULES.lock().unwrap().clone();
     checked(space, s)
         .into_iter()
         .filter(|(u, c)| {
-            matches!(c, Checked::Private(_))
+            matches!(c, Checked::Private(r)
+                if !matches!(**r, PrivateRecord::Rules(_) | PrivateRecord::Approval(_)))
                 && interaction_counts(u, rules.as_ref(), &AppInputs, &Everyone)
         })
         .map(|(u, _)| u)
         .collect()
+}
+
+/// The app's table of approved followers, from one of its syncs: the
+/// owner's approvals, through `approved_followers`.
+fn learn_approvals(space: &SpaceRef, s: &Synced) -> BTreeSet<String> {
+    let records: Vec<(SpaceRecordUri, _)> = s
+        .repos
+        .iter()
+        .flat_map(|(did, rs)| {
+            rs.iter().filter_map(|r| {
+                space
+                    .record(did, &r.collection, &r.rkey)
+                    .ok()
+                    .map(|u| (u, r.value.clone()))
+            })
+        })
+        .collect();
+    let set = approved_followers(space, records.iter().map(|(u, v)| (u, v)));
+    *ALLOWED.lock().unwrap() = set.clone();
+    set
+}
+
+/// The notifications since `n` reporting a write to `repo`'s repo, waiting
+/// up to 15 s for the first: atproto-pds sends them from a worker that runs
+/// every 5 s.
+fn writes_noted(n: usize, repo: &str) -> usize {
+    let count = || {
+        NOTES.lock().unwrap()[n..]
+            .iter()
+            .filter(|v| {
+                v["update"]["$type"] == "com.atproto.space.defs#repoWrite"
+                    && v["update"]["repo"] == repo
+            })
+            .count()
+    };
+    for _ in 0..60 {
+        if count() > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    count()
+}
+
+fn approval(subject: &str) -> Value {
+    json!({ "$type": PRIVATE_APPROVAL, "subject": subject, "createdAt": CREATED })
 }
 
 pub(crate) fn run(
@@ -465,7 +519,6 @@ pub(crate) fn run(
     let alice = create_account(pds, "pvalice")?;
     let bob = create_account(pds, "pvbob")?;
     let carol = create_account(pds, "pvcarol")?;
-    ALLOWED.lock().unwrap().insert(bob.did.clone());
 
     // ---- Alice's public history, and others' public interactions.
     let png = STANDARD.decode(PNG_1X1).map_err(|e| e.to_string())?;
@@ -867,6 +920,59 @@ pub(crate) fn run(
         },
     );
 
+    // ---- Alice approves Bob: an approval record in her private space,
+    // written like the rules. The app learns it from a notification and its
+    // own sync, with no delegation and nothing from Alice.
+    let before = learn_approvals(&space, &s);
+    let n = ncalls();
+    let n_notes = NOTES.lock().unwrap().len();
+    let ak = "3mbpaaaaaaa2p";
+    let aw = space_writes(
+        pds,
+        &alice,
+        &space,
+        vec![screate(PRIVATE_APPROVAL, ak, &approval(&bob.did))],
+        None,
+    )?;
+    settle();
+    let noted = writes_noted(n_notes, &alice.did);
+    let asked = calls_since(n);
+    let n = ncalls();
+    let sa = app_sync(pds, dir, &space, &app_client, false)?;
+    let c = calls_since(n);
+    let approved = learn_approvals(&space, &sa);
+    let bob_passes = can_view_private(
+        Some(&bob.did),
+        &alice.did,
+        RULES.lock().unwrap().as_ref(),
+        &AppInputs,
+        &Everyone,
+    );
+    let hidden = !shown(&space, &sa)
+        .iter()
+        .any(|u| u.collection() == PRIVATE_APPROVAL || u.collection() == PRIVATE_RULES);
+    report.check(
+        "private: Alice's approval of Bob is written with validate unset and asks the app nothing; a repoWrite for Alice reaches the app, whose own attestation sync (no delegation) reads it; approved_followers gives Bob alone, so he passes the rules; neither the approval nor the rules are shown",
+        if aw.status == 200
+            && before.is_empty()
+            && asked.is_empty()
+            && noted >= 1
+            && c.len() == 1
+            && c[0].repo.is_none()
+            && c[0].answer == (true, false)
+            && approved == BTreeSet::from([bob.did.clone()])
+            && bob_passes
+            && hidden
+        {
+            Ok(format!(
+                "validationStatus {}; {noted} notification(s); approved {approved:?}",
+                aw.json()["results"][0]["validationStatus"]
+            ))
+        } else {
+            Err(format!("{}; before {before:?}; asked {asked:?}; noted {noted}; calls {c:?}; approved {approved:?}; hidden {hidden}", show(&aw)))
+        },
+    );
+
     // ---- Interactions inside the owner's space.
     let priv_p1 = space
         .record(&alice.did, BSKY_POST, p1)
@@ -970,6 +1076,54 @@ pub(crate) fn run(
         },
     );
 
+    // ---- Approvals by anyone but Alice grant nothing. Carol's (she
+    // doesn't pass) isn't tracked; Bob's (he does) is, and the app sees it,
+    // so approved_followers has to ignore it.
+    let (ck, bk) = ("3mbpaaaaaaa2q", "3mbpaaaaaaa2r");
+    let cw = space_writes(
+        pds,
+        &carol,
+        &space,
+        vec![screate(PRIVATE_APPROVAL, ck, &approval(&carol.did))],
+        None,
+    )?;
+    let bw = space_writes(
+        pds,
+        &bob,
+        &space,
+        vec![screate(PRIVATE_APPROVAL, bk, &approval(&carol.did))],
+        None,
+    )?;
+    settle();
+    let sx = app_sync(pds, dir, &space, &app_client, false)?;
+    let approved = learn_approvals(&space, &sx);
+    let bobs_approval = has(&sx, &bob.did, PRIVATE_APPROVAL, bk).is_some();
+    let carol_passes = can_view_private(
+        Some(&carol.did),
+        &alice.did,
+        RULES.lock().unwrap().as_ref(),
+        &AppInputs,
+        &Everyone,
+    );
+    // Bob takes his back, so the rest of the flow counts his records as
+    // before.
+    let bd = space_writes(pds, &bob, &space, vec![sdelete(PRIVATE_APPROVAL, bk)], None)?;
+    report.check(
+        "private: approvals by others grant nothing: Carol's isn't tracked; Bob's is, and the app's sync holds it, yet approved_followers still gives Bob alone and Carol doesn't pass",
+        if cw.status == 200
+            && bw.status == 200
+            && !sx.writers.contains(&carol.did)
+            && bobs_approval
+            && approved == BTreeSet::from([bob.did.clone()])
+            && !carol_passes
+            && bd.status == 200
+        {
+            Ok(format!("writers {:?}; approved {approved:?}", sx.writers))
+        } else {
+            Err(format!("{} / {} / {}; writers {:?}; bob's held {bobs_approval}; approved {approved:?}", show(&cw), show(&bw), show(&bd), sx.writers))
+        },
+    );
+
     // ---- Accounts never get credentials; the owner does.
     let n = ncalls();
     let b_del = own_delegation_sync(pds, &space, &bob)?;
@@ -986,9 +1140,43 @@ pub(crate) fn run(
         },
     );
 
-    // ---- Bob loses access; he stays a writer at the PDS, and the app
+    // ---- Alice removes Bob by deleting her approval. A notification
+    // reaches the app, and its next sync drops him.
+    let n_notes = NOTES.lock().unwrap().len();
+    let rd = space_writes(
+        pds,
+        &alice,
+        &space,
+        vec![sdelete(PRIVATE_APPROVAL, ak)],
+        None,
+    )?;
+    settle();
+    let noted = writes_noted(n_notes, &alice.did);
+    let sr = app_sync(pds, dir, &space, &app_client, false)?;
+    let approved = learn_approvals(&space, &sr);
+    let bob_passes = can_view_private(
+        Some(&bob.did),
+        &alice.did,
+        RULES.lock().unwrap().as_ref(),
+        &AppInputs,
+        &Everyone,
+    );
+    report.check(
+        "private: Alice deletes her approval of Bob; a repoWrite for Alice reaches the app, and its next attestation sync has no approvals left, so Bob no longer passes",
+        if rd.status == 200
+            && noted >= 1
+            && has(&sr, &alice.did, PRIVATE_APPROVAL, ak).is_none()
+            && approved.is_empty()
+            && !bob_passes
+        {
+            Ok(format!("{noted} notification(s)"))
+        } else {
+            Err(format!("{}; noted {noted}; approved {approved:?}; bob passes {bob_passes}", show(&rd)))
+        },
+    );
+
+    // ---- Bob has lost access; he stays a writer at the PDS, and the app
     // filters.
-    ALLOWED.lock().unwrap().remove(&bob.did);
     let n = ncalls();
     let b2_k = "3mbpaaaaaaa2h";
     let b2 = space_writes(

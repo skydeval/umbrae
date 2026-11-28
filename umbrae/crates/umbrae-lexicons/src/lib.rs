@@ -28,6 +28,7 @@
 //! | `tools.umbrae.labelerAudience` | a permitted list for restricted labels |
 //! | `tools.umbrae.private` | the space type: one private account's posts, reposts, likes and gates |
 //! | `tools.umbrae.private.rules` | who may see a private account's records |
+//! | `tools.umbrae.private.approval` | the owner approves one follower, in the private space |
 //! | `tools.umbrae.private.declaration` | in the public repo: the account is private, and its serving app |
 //!
 //! A `tools.umbrae.space` space also holds `com.atproto.label.record`, the
@@ -62,7 +63,7 @@ pub use list::{
     validate_list_record, Exemption, ExemptionKind, List, ListItem, ListRecord, ListRef, Purpose,
     EXEMPTION_LABEL, EXEMPTION_LABELER, EXEMPTION_LIST,
 };
-pub use private::{validate_private_record, PrivatePost, PrivateRecord, Rule, Rules};
+pub use private::{validate_private_record, Approval, PrivatePost, PrivateRecord, Rule, Rules};
 pub use social::{
     Audience, Follow, Postgate, Profile, ProfileLink, PronounSet, ReplyRule, Threadgate,
     AUDIENCE_COMMUNITY, AUDIENCE_EVERYONE, AUDIENCE_FOLLOWERS, AUDIENCE_GROUP, AUDIENCE_PRIVATE,
@@ -138,6 +139,10 @@ pub const LABELER_AUDIENCE: &str = "tools.umbrae.labelerAudience";
 /// The space type of a private account: one per account, at key `self`.
 pub const PRIVATE_SPACE_TYPE: &str = "tools.umbrae.private";
 pub const PRIVATE_RULES: &str = "tools.umbrae.private.rules";
+/// The owner's approval of one follower, in its private space. Not in
+/// [`PRIVATE_COLLECTIONS`]: no public alias names one, and it stays in the
+/// space when the owner goes public.
+pub const PRIVATE_APPROVAL: &str = "tools.umbrae.private.approval";
 pub const PRIVATE_DECLARATION: &str = "tools.umbrae.private.declaration";
 /// Private-account methods, served by the account's serving app.
 pub const PRIVATE_REGISTER: &str = "tools.umbrae.private.register";
@@ -166,7 +171,9 @@ pub const BSKY_THREADGATE: &str = "app.bsky.feed.threadgate";
 pub const BSKY_POSTGATE: &str = "app.bsky.feed.postgate";
 /// A public list, as a `#list` rule names it.
 pub const BSKY_LIST: &str = "app.bsky.graph.list";
-/// Every collection of a private space.
+/// The collections of a private space that a public alias may name: the
+/// native ones and the rules. The space type also lists
+/// [`PRIVATE_APPROVAL`].
 pub const PRIVATE_COLLECTIONS: [&str; 6] = [
     BSKY_POST,
     BSKY_REPOST,
@@ -301,6 +308,10 @@ pub const LEXICONS: &[(&str, &str)] = &[
     (
         PRIVATE_RULES,
         include_str!("../lexicons/tools/umbrae/private/rules.json"),
+    ),
+    (
+        PRIVATE_APPROVAL,
+        include_str!("../lexicons/tools/umbrae/private/approval.json"),
     ),
     (
         PRIVATE_DECLARATION,
@@ -454,10 +465,26 @@ mod tests {
             .iter()
             .map(|c| c.as_str().unwrap())
             .collect();
-        assert_eq!(cols, PRIVATE_COLLECTIONS);
+        let mut want = PRIVATE_COLLECTIONS.to_vec();
+        want.push(PRIVATE_APPROVAL);
+        assert_eq!(cols, want);
+        // The approval is a TID-keyed record naming a DID, and the rules
+        // carry the migration marker.
+        let approval: Value = serde_json::from_str(get(PRIVATE_APPROVAL).unwrap()).unwrap();
+        let am = &approval["defs"]["main"];
+        assert_eq!(am["key"], "tid");
+        assert_eq!(am["record"]["properties"]["subject"]["format"], "did");
+        assert_eq!(
+            am["record"]["required"],
+            serde_json::json!(["subject", "createdAt"])
+        );
         // The rule types and the private audience are defined where their
         // NSIDs say.
         let rules: Value = serde_json::from_str(get(PRIVATE_RULES).unwrap()).unwrap();
+        assert_eq!(
+            rules["defs"]["main"]["record"]["properties"]["approvalsInSpace"]["type"],
+            "boolean"
+        );
         for ty in [
             PRIVATE_RULE_APPROVED_FOLLOWERS,
             PRIVATE_RULE_FOLLOWING,

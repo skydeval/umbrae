@@ -18,8 +18,9 @@ pub enum Checked {
     /// A valid labeler record (label, profile, policies or reasons).
     Labeler(Box<LabelerRecord>),
     /// A valid record in a private account's space: a native post, repost,
-    /// like or gate, or the owner's rules. Another account's shows only
-    /// while its author passes the owner's rules.
+    /// like or gate, or the owner's rules or approvals. Another account's
+    /// shows only while its author passes the owner's rules. The rules and
+    /// approvals are for the owner and the serving app, never shown.
     Private(Box<PrivateRecord>),
     /// An in-space label (`com.atproto.label.record`) in a
     /// `tools.umbrae.space` or private space. Whose count, and whether it
@@ -142,6 +143,31 @@ mod tests {
             .record("did:example:b", "app.bsky.feed.post", "3mbaaaaaaaaa2")
             .unwrap();
         assert!(matches!(check(&theirs, &native), Checked::Invalid(_)));
+        // The owner's approval counts; another account's doesn't.
+        let approval = BTreeMap::from([
+            ("$type".to_owned(), t("tools.umbrae.private.approval")),
+            ("subject".to_owned(), t("did:example:b")),
+            ("createdAt".to_owned(), t("2026-11-27T10:00:00Z")),
+        ]);
+        let own = private
+            .record(
+                "did:example:a",
+                "tools.umbrae.private.approval",
+                "3mbaaaaaaaaa2",
+            )
+            .unwrap();
+        assert!(matches!(
+            check(&own, &approval),
+            Checked::Private(r) if matches!(*r, PrivateRecord::Approval(_))
+        ));
+        let theirs = private
+            .record(
+                "did:example:b",
+                "tools.umbrae.private.approval",
+                "3mbaaaaaaaaa2",
+            )
+            .unwrap();
+        assert!(matches!(check(&theirs, &approval), Checked::Invalid(_)));
         // The published policy is the caller's.
         let policy = private
             .record("did:example:a", "com.atproto.space.policy", "self")

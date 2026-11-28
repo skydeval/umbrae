@@ -1,0 +1,29 @@
+{
+  "lexicon": 1,
+  "id": "tools.umbrae.private.approval",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "The owner approves one follower of a private account. In the owner's private space, written by the owner; any other author's approvals are ignored. Only the owner and the serving app read it, so approved followers don't see each other. An account with at least one approval passes approvedFollowers; removing a follower deletes their approvals. A block, list block or inactive account still sees nothing.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": [
+          "subject",
+          "createdAt"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "format": "did",
+            "description": "The approved account. Never the owner."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    }
+  }
+}

@@ -16,19 +16,25 @@
 //!   a reply whose root is the owner's post and whose parent is in this
 //!   space, a like, repost or quote of a record in this space, or a postgate
 //!   on its own post here. A top-level post doesn't count;
-//! - `rules` only by the owner.
+//! - `rules` only by the owner;
+//! - `approval` (`tools.umbrae.private.approval`) only by the owner, at a
+//!   TID, naming a DID other than the owner. The owner's approvals are its
+//!   approved followers. Approvals aren't one of the six: no public alias
+//!   names one, and they stay inside when the owner goes public.
 
 use crate::validate::{
     datetime, is_datetime, strong_ref, Invalid, PublicUri, Reply, StrongRef, Target,
 };
 use crate::{
-    BSKY_LIKE, BSKY_POST, BSKY_POSTGATE, BSKY_REPOST, BSKY_THREADGATE, PRIVATE_COLLECTIONS,
-    PRIVATE_RULES, PRIVATE_RULE_APPROVED_FOLLOWERS, PRIVATE_RULE_FOLLOWING, PRIVATE_RULE_LIST,
-    PRIVATE_RULE_MUTUALS, PRIVATE_SPACE_TYPE, SELF_RKEY,
+    BSKY_LIKE, BSKY_POST, BSKY_POSTGATE, BSKY_REPOST, BSKY_THREADGATE, PRIVATE_APPROVAL,
+    PRIVATE_COLLECTIONS, PRIVATE_RULES, PRIVATE_RULE_APPROVED_FOLLOWERS, PRIVATE_RULE_FOLLOWING,
+    PRIVATE_RULE_LIST, PRIVATE_RULE_MUTUALS, PRIVATE_SPACE_TYPE, SELF_RKEY,
 };
 use std::collections::BTreeMap;
 use umbrae_core::drisl::Value;
-use umbrae_core::uri::{contains_space_uri, is_space_uri, is_valid_tid, SpaceRecordUri, SpaceRef};
+use umbrae_core::uri::{
+    contains_space_uri, is_space_uri, is_valid_did, is_valid_tid, SpaceRecordUri, SpaceRef,
+};
 
 type Map = BTreeMap<String, Value>;
 
@@ -36,7 +42,8 @@ type Map = BTreeMap<String, Value>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Rule {
-    /// Members of the owner's followers space.
+    /// Accounts the owner approved: named by at least one of the owner's
+    /// `tools.umbrae.private.approval` records in the private space.
     ApprovedFollowers,
     /// Accounts the owner follows publicly.
     Following,
@@ -56,6 +63,19 @@ pub struct Rules {
     pub allow: Vec<Rule>,
     pub created_at: String,
     pub updated_at: Option<String>,
+    /// `approvalsInSpace`: approved followers are the owner's approvals
+    /// only. `false` (or absent) while an account made private before
+    /// approvals may still be migrating from its followers space.
+    pub approvals_in_space: bool,
+}
+
+/// `tools.umbrae.private.approval`: the owner approves one follower.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Approval {
+    /// The approved account's DID, never the owner's.
+    pub subject: String,
+    pub created_at: String,
 }
 
 /// The parts of a native post that the rules use.
@@ -83,12 +103,15 @@ pub enum PrivateRecord {
     /// A postgate, by its post.
     Postgate(Target),
     Rules(Rules),
+    /// The owner's approval of one follower.
+    Approval(Approval),
 }
 
 /// Validate a record synced from a private space, given its full URI.
 ///
-/// `Ok(None)` for a collection that isn't one of the six (the PDS's
-/// published policy, or another app's): the caller handles or ignores it.
+/// `Ok(None)` for a collection that isn't one of the six or an approval
+/// (the PDS's published policy, or another app's): the caller handles or
+/// ignores it.
 pub fn validate_private_record(
     uri: &SpaceRecordUri,
     value: &Map,
@@ -98,6 +121,9 @@ pub fn validate_private_record(
         return Err(Invalid("not a tools.umbrae.private space"));
     }
     let collection = uri.collection();
+    if collection == PRIVATE_APPROVAL {
+        return approval(uri, value).map(|a| Some(PrivateRecord::Approval(a)));
+    }
     if !PRIVATE_COLLECTIONS.contains(&collection) {
         return Ok(None);
     }
@@ -241,6 +267,31 @@ fn post(m: &Map) -> Result<PrivatePost, Invalid> {
     Ok(PrivatePost { reply, quote })
 }
 
+fn approval(uri: &SpaceRecordUri, m: &Map) -> Result<Approval, Invalid> {
+    let owner = uri.space().authority();
+    if uri.author() != owner {
+        return Err(Invalid("only the owner's approvals count"));
+    }
+    if !is_valid_tid(uri.rkey()) {
+        return Err(Invalid("record key must be a TID"));
+    }
+    match m.get("$type") {
+        Some(Value::Text(t)) if t == PRIVATE_APPROVAL => {}
+        _ => return Err(Invalid("$type must match the collection")),
+    }
+    let subject = match m.get("subject") {
+        Some(Value::Text(d)) if is_valid_did(d) => d.clone(),
+        _ => return Err(Invalid("an approval's subject is a DID")),
+    };
+    if subject == owner {
+        return Err(Invalid("the owner doesn't approve itself"));
+    }
+    Ok(Approval {
+        subject,
+        created_at: datetime(m, "createdAt")?,
+    })
+}
+
 fn rules(m: &Map) -> Result<Rules, Invalid> {
     let Some(Value::Array(items)) = m.get("allow") else {
         return Err(Invalid("the rules list what they allow"));
@@ -272,6 +323,11 @@ fn rules(m: &Map) -> Result<Rules, Invalid> {
             None => None,
             Some(Value::Text(t)) if is_datetime(t) => Some(t.clone()),
             Some(_) => return Err(Invalid("updatedAt must be an atproto datetime")),
+        },
+        approvals_in_space: match m.get("approvalsInSpace") {
+            None => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return Err(Invalid("approvalsInSpace must be a boolean")),
         },
     })
 }
@@ -553,5 +609,66 @@ mod tests {
         let mut undated = r.clone();
         undated.remove("createdAt");
         assert!(check(ALICE, PRIVATE_RULES, SELF_RKEY, &undated).is_err());
+        // The migration marker: absent is false, a boolean is read, and
+        // anything else refuses the record.
+        assert!(!parsed.approvals_in_space);
+        for (v, want) in [
+            (Value::Bool(true), Some(true)),
+            (Value::Bool(false), Some(false)),
+            (t("yes"), None),
+        ] {
+            let mut marked = r.clone();
+            marked.insert("approvalsInSpace".into(), v);
+            let got = match check(ALICE, PRIVATE_RULES, SELF_RKEY, &marked) {
+                Ok(Some(PrivateRecord::Rules(x))) => Some(x.approvals_in_space),
+                _ => None,
+            };
+            assert_eq!(got, want);
+        }
+    }
+
+    fn approval(subject: Value) -> Map {
+        map(&[
+            ("$type", t(PRIVATE_APPROVAL)),
+            ("subject", subject),
+            ("createdAt", t(NOW)),
+        ])
+    }
+
+    #[test]
+    fn approvals_are_the_owners_and_name_another_did() {
+        let ok = approval(t(BOB));
+        assert_eq!(
+            check(ALICE, PRIVATE_APPROVAL, RKEY, &ok),
+            Ok(Some(PrivateRecord::Approval(Approval {
+                subject: BOB.into(),
+                created_at: NOW.into()
+            })))
+        );
+        // A did:web with a port is a fine subject; that's why the key is a
+        // TID, not the DID.
+        let web = "did:web:localhost%3A8080";
+        assert!(check(ALICE, PRIVATE_APPROVAL, RKEY, &approval(t(web))).is_ok());
+        // By anyone else, even naming someone else: it counts for nothing.
+        assert!(check(BOB, PRIVATE_APPROVAL, RKEY, &approval(t(CAROL))).is_err());
+        assert!(check(CAROL, PRIVATE_APPROVAL, RKEY, &ok).is_err());
+        // The owner as subject; a subject that isn't a DID, or is missing.
+        assert!(check(ALICE, PRIVATE_APPROVAL, RKEY, &approval(t(ALICE))).is_err());
+        assert!(check(ALICE, PRIVATE_APPROVAL, RKEY, &approval(t("bob.test"))).is_err());
+        let mut bare = ok.clone();
+        bare.remove("subject");
+        assert!(check(ALICE, PRIVATE_APPROVAL, RKEY, &bare).is_err());
+        // Not a TID; no createdAt; the wrong $type.
+        assert!(check(ALICE, PRIVATE_APPROVAL, "self", &ok).is_err());
+        let mut undated = ok.clone();
+        undated.remove("createdAt");
+        assert!(check(ALICE, PRIVATE_APPROVAL, RKEY, &undated).is_err());
+        let mut typed = ok.clone();
+        typed.insert("$type".into(), t(PRIVATE_RULES));
+        assert!(check(ALICE, PRIVATE_APPROVAL, RKEY, &typed).is_err());
+        // No public alias names an approval: it isn't a record "in this
+        // space" for a like.
+        let alias = format!("at://{ALICE}/{PRIVATE_APPROVAL}/{RKEY}");
+        assert!(check(BOB, BSKY_LIKE, RKEY, &subject(BSKY_LIKE, &alias)).is_err());
     }
 }

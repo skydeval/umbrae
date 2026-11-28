@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-28
+
+Private accounts keep their approved followers in the private space, so the serving app sees approvals and removals while the owner is offline, and approved followers no longer see each other.
+
+### Added
+- `tools.umbrae.private.approval`: the owner's approval of one follower, `{subject, createdAt}` at a TID, in the owner's private space (`PRIVATE_APPROVAL`). `validate_private_record` returns it as `PrivateRecord::Approval` (`Approval`): only the owner's count, and the subject is a DID other than the owner's. `umbrae-sync` returns it as `Checked::Private`.
+- `approved_followers(space, records)`: the subjects of the owner's valid approvals. Others' approvals, which a writer who passes the rules can put in the space, count for nothing; several approvals of one account keep it approved until the last is deleted.
+- The rules' optional `approvalsInSpace` (`Rules::approvals_in_space`): set once an account made private under 0.8.1 has copied its followers-space members into approvals, and from the start by accounts going private now. A non-boolean refuses the rules record.
+- Interop coverage on both PDSes: the owner's approval asks the app nothing; a notification reaches the app, whose own attestation sync reads it with no delegation, and the approved account passes; an approval by an account that doesn't pass isn't tracked, and one by an account that does is tracked but grants nothing; deleting the approval notifies the app and its next sync drops the follower; neither approvals nor the rules are ever shown.
+
+### Changed
+- `#approvedFollowers` means the accounts the owner approved in the private space, not members of its followers space. The serving app needs no followers-space grant or delegation for private accounts; register syncs only the private space.
+- `tools.umbrae.private` declares `tools.umbrae.private.approval` among its collections, and the owner's scope adds `collection=tools.umbrae.private.approval`. Lexicons are republished with this release, before clients ask for the new scope. `PRIVATE_COLLECTIONS` is unchanged.
+- Docs: approving with an approval record; the migration for accounts made private under 0.8.1, the serving app upgrading first; the read surface serves only the native collections, never the rules or approvals; approvals stay in the space on going public.
+
 ## [0.9.0] - 2026-11-27
 
 Spaces compatibility: Umbrae reads and writes the spec's in-space labels, honors `!takedown`, and runs its interop suite against a second PDS.
@@ -273,7 +288,8 @@ Spaces compatibility: Umbrae reads and writes the spec's in-space labels, honors
   - the public-leak guard.
 - The interop harness against the reference spaces PDS.
 
-[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/skydeval/umbrae/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/skydeval/umbrae/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/skydeval/umbrae/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/skydeval/umbrae/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/skydeval/umbrae/compare/v0.7.4...v0.8.0
